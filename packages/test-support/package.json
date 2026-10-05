@@ -2,5 +2,19 @@
   "name": "@beloveddev/test-support",
   "version": "0.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": {
+    "./test-database": {
+      "types": "./dist/test-database.d.ts",
+      "import": "./dist/test-database.js"
+    },
+    "./tenant-fixtures": {
+      "types": "./dist/tenant-fixtures.d.ts",
+      "import": "./dist/tenant-fixtures.js"
+    }
+  },
+  "dependencies": {
+    "@beloveddev/database": "0.0.0",
+    "drizzle-orm": "0.45.3"
+  }
 }

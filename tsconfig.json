@@ -2,7 +2,19 @@
   "files": [],
   "references": [
     {
+      "path": "packages/domain"
+    },
+    {
+      "path": "packages/application"
+    },
+    {
+      "path": "packages/database"
+    },
+    {
       "path": "packages/infrastructure"
+    },
+    {
+      "path": "packages/test-support"
     },
     {
       "path": "apps/mcp-server"

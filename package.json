@@ -8,32 +8,43 @@
     "packages/*"
   ],
   "engines": {
-    "node": ">=24.12.0 <25",
-    "npm": ">=11 <12"
+    "node": "\u003e=24.12.0 \u003c25",
+    "npm": "\u003e=11 \u003c12"
   },
   "packageManager": "npm@11.6.2",
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "npm run build && tsc -p tsconfig.check.json",
-    "lint": "npm run build && eslint . --max-warnings=0",
+    "typecheck": "npm run build \u0026\u0026 tsc -p tsconfig.check.json",
+    "lint": "npm run build \u0026\u0026 eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "npm run build && vitest run",
-    "test:watch": "npm run build && vitest",
-    "verify": "npm run format:check && npm run lint && npm run typecheck && npm test",
+    "test": "npm run build \u0026\u0026 vitest run",
+    "test:watch": "npm run build \u0026\u0026 vitest",
+    "verify": "npm run format:check \u0026\u0026 npm run lint \u0026\u0026 npm run typecheck \u0026\u0026 npm test",
     "start": "node --env-file-if-exists=.env apps/mcp-server/dist/main.js",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
-    "db:logs": "docker compose logs -f postgres"
+    "db:logs": "docker compose logs -f postgres",
+    "test:integration": "npm run build \u0026\u0026 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts",
+    "db:generate": "npm run build \u0026\u0026 drizzle-kit generate --config=packages/database/drizzle.config.ts",
+    "db:check": "drizzle-kit check --config=packages/database/drizzle.config.ts",
+    "db:migrate": "npm run build \u0026\u0026 node --env-file-if-exists=.env scripts/migrate.ts",
+    "verify:all": "npm run verify \u0026\u0026 npm run db:check \u0026\u0026 npm run test:integration"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
     "@types/node": "^24.10.1",
+    "drizzle-kit": "0.31.11",
     "eslint": "10.12.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.7.4",
     "typescript": "5.9.3",
     "typescript-eslint": "8.71.0",
     "vitest": "5.0.3"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "^0.25.4"
+    }
   }
 }

@@ -1,25 +1,29 @@
 # BelovedDev MCP V1 — Architecture
 
-## Milestone 0 implementation
+## Milestone 1 implementation
 
-The current executable is a configuration/logging bootstrap that exits without
-starting a transport or opening a database connection. npm workspaces establish
-the package boundaries; TypeScript project references build the two active
-packages, `infrastructure` and `mcp-server`. Other packages contain metadata only.
+The executable remains a configuration/logging bootstrap with no database
+connection or MCP transport. Database setup is an explicit migration CLI action.
 
-`packages/infrastructure` currently owns the Zod environment validator and Pino
-logger. `apps/mcp-server` supplies the environment and instantiates the logger.
-There are no application ports or domain abstractions until a use case needs them.
-The domain and application layers will remain independent of MCP and concrete
-database adapters; the runtime flow below does not reverse that dependency rule.
+The domain package defines portable records and status values; the application
+package defines membership, profile, client, and project repository ports.
+Infrastructure implements them with tenant predicates in Drizzle queries.
+The database package owns schema, migrations, and pool lifecycle. Core packages
+do not depend on persistence or transport. MCP and shared remain metadata-only.
 
-Logs go to stderr to preserve future MCP stdout framing. Configuration failures
-expose field names only. Local PostgreSQL is bound to loopback, with no domain
-schema or connection pool. Trusted tenancy, authorization, least-privilege database
-roles, and transactional data access must be implemented with the first relevant
-features; this milestone does not claim to enforce tenant isolation on data.
+Missing and cross-tenant lookups return null. Repository errors expose safe
+categories without raw SQL causes. Project creation is one atomic INSERT with a
+composite client ownership foreign key. It is an internal persistence operation;
+authenticated, permission-checked, audited user-facing mutations remain deferred.
 
-The remaining sections describe the target V1 architecture.
+Real PostgreSQL tests apply migrations to fresh databases and use a restricted
+runtime login for repository queries, separate from migration/fixture credentials.
+Trusted tenant context and authorization are not yet implemented. There is no
+RLS policy or claim of protection against arbitrary SQL using compromised credentials.
+
+See [database conventions](database.md) for concrete schema choices, migration
+commands, test isolation, and tooling compatibility. The remaining sections
+describe the target V1 architecture.
 
 ## 1. Architectural Goal
 
@@ -358,9 +362,12 @@ rather than revealing ownership.
 
 Foreign keys protect referential integrity.
 
-Application/repository logic protects same-tenant relationships where standard foreign keys alone cannot express the ownership rule.
-
-Composite foreign keys may be considered where they materially simplify and strengthen tenant invariants, but should not be introduced mechanically.
+Milestone 1 enforces project/client ownership with a composite foreign key:
+`projects(tenant_id, client_id)` references `clients(tenant_id, id)`. The supporting
+composite unique constraint is justified by this invariant. A null client is
+allowed, while the separate project tenant foreign key remains mandatory.
+Application/repository logic must preserve these constraints as new relationships
+are introduced.
 
 ## 9. Authentication
 

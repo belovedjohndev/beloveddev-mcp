@@ -5,12 +5,13 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 0
+## Current status: Milestone 1
 
-This workspace contains development infrastructure only. The executable validates
-configuration, emits a structured log, and exits. It does not start an MCP server
-or connect to PostgreSQL. Domain tables, authentication, authorization, MCP tools,
-Drizzle, and the MCP SDK belong to later milestones.
+The database and tenancy foundation implements six tables, a reviewed Drizzle
+migration, tenant-scoped repositories, and real PostgreSQL integration tests.
+The executable still validates configuration, logs, and exits; it does not open
+a database connection or start an MCP server. Authentication, application use
+cases, Milestone 2 entities, and MCP tools remain deferred.
 
 ## Requirements
 
@@ -27,11 +28,14 @@ Run commands from the repository root.
    - PowerShell: `Copy-Item .env.example .env`
    - POSIX shell: `cp .env.example .env`
 3. Start PostgreSQL: `npm run db:up`.
-4. Check the workspace: `npm run verify`.
-5. Run the foundation bootstrap: `npm start`.
+4. Apply the initial schema: `npm run db:migrate`.
+5. Check everything, including real PostgreSQL tests: `npm run verify:all`.
+6. Run the foundation bootstrap: `npm start`.
 
 If port 5432 is already occupied, choose a free port in `POSTGRES_PORT` and
-update `DATABASE_URL` to match before starting Compose.
+update `DATABASE_URL` and `TEST_DATABASE_URL` to match before starting Compose.
+The [database guide](docs/database.md) includes a PowerShell workflow that asks
+Docker for an available host port.
 
 A valid configuration produces one JSON log on stderr and exit code 0. Invalid
 configuration produces a safe JSON error and exit code 1. Stdout stays empty for a
@@ -40,25 +44,31 @@ configuration errors still log. No long-running server is expected in this miles
 
 ## Commands
 
-| Command                | Purpose                                                                   |
-| ---------------------- | ------------------------------------------------------------------------- |
-| `npm ci`               | Install the locked dependency tree, including local workspaces            |
-| `npm run build`        | Build active packages in dependency order with TypeScript                 |
-| `npm run typecheck`    | Build production code and check tests/configuration without emitting them |
-| `npm run lint`         | Build package declarations, then run type-aware ESLint                    |
-| `npm run format:check` | Check formatting of maintained foundation files                           |
-| `npm run format`       | Format maintained files                                                   |
-| `npm test`             | Build and run Vitest, including compiled bootstrap tests                  |
-| `npm run test:watch`   | Build once, then watch tests                                              |
-| `npm run verify`       | Check formatting, lint, types, build, and tests                           |
-| `npm start`            | Run the compiled bootstrap; build first                                   |
-| `npm run db:up`        | Start PostgreSQL and wait for its health check                            |
-| `npm run db:down`      | Stop PostgreSQL, retaining the data volume                                |
-| `npm run db:logs`      | Follow PostgreSQL logs                                                    |
+| Command                    | Purpose                                                                      |
+| -------------------------- | ---------------------------------------------------------------------------- |
+| `npm ci`                   | Install the locked dependency tree, including local workspaces               |
+| `npm run build`            | Build active packages in dependency order with TypeScript                    |
+| `npm run typecheck`        | Build production code and check tests/configuration without emitting them    |
+| `npm run lint`             | Build package declarations, then run type-aware ESLint                       |
+| `npm run format:check`     | Check formatting of maintained foundation files                              |
+| `npm run format`           | Format maintained files                                                      |
+| `npm test`                 | Build and run Vitest, including compiled bootstrap tests                     |
+| `npm run test:watch`       | Build once, then watch tests                                                 |
+| `npm run verify`           | Check formatting, lint, types, build, and tests                              |
+| `npm run test:integration` | Run real PostgreSQL migration, constraint, and tenant-isolation tests        |
+| `npm run verify:all`       | Run all checks, including integration tests and migration history validation |
+| `npm run db:generate`      | Generate reviewed Drizzle SQL migrations and metadata                        |
+| `npm run db:check`         | Validate Drizzle migration history                                           |
+| `npm run db:migrate`       | Apply committed migrations using DATABASE_URL                                |
+| `npm start`                | Run the compiled bootstrap; build first                                      |
+| `npm run db:up`            | Start PostgreSQL and wait for its health check                               |
+| `npm run db:down`          | Stop PostgreSQL, retaining the data volume                                   |
+| `npm run db:logs`          | Follow PostgreSQL logs                                                       |
 
 The bootstrap tests execute compiled files. After changing application startup code
-during watch mode, rerun the build or restart the watcher. There is no repository
-integration-test command yet because there are no repositories or schemas.
+during watch mode, rerun the build or restart the watcher. The default unit suite
+does not require PostgreSQL; integration tests are run explicitly or through
+`verify:all`.
 
 ## Workspace
 
@@ -66,44 +76,46 @@ integration-test command yet because there are no repositories or schemas.
 apps/
   mcp-server/       Composition root: environment -> logger -> exit
 packages/
-  domain/           Reserved for pure domain rules
-  application/      Reserved for use cases and ports
-  database/         Reserved for Drizzle, migrations, and connection lifecycle
-  infrastructure/   Environment validation and structured logging
+  domain/           Portable entity types and status values
+  application/      Explicit repository ports and safe repository errors
+  database/         Drizzle schema, migration, and connection lifecycle
+  infrastructure/   Scoped PostgreSQL adapters, environment validation, and logging
   mcp/              Reserved for transport adapters and tool contracts
   shared/           Reserved for demonstrated cross-cutting needs
-  test-support/     Reserved for reusable test infrastructure
+  test-support/     Disposable databases and two-tenant fixtures
 docs/               Product, domain, architecture, contracts, and delivery plan
 ```
 
-Reserved workspaces contain only private package metadata. There are no empty
-service classes, repository interfaces, dependency-injection containers, or dummy
-exports. Only `infrastructure` and `mcp-server` participate in the build today.
+Only `mcp` and `shared` remain metadata-only workspaces. Repository interfaces
+exist only for implemented operations; there is no generic base repository or
+dependency-injection container.
 
-Runtime dependencies are Zod and Pino. Node loads local environment files natively;
-TypeScript builds ESM with NodeNext resolution. The application imports explicit
-infrastructure package exports. Future domain/application packages must remain
-independent of concrete database and MCP adapters.
+Runtime dependencies are Zod, Pino, Drizzle ORM, and node-postgres. Drizzle Kit is
+development tooling. Node loads local environment files natively; TypeScript
+builds ESM with NodeNext resolution. Core domain/application code is independent
+of Drizzle and concrete adapters.
 
 ## Configuration
 
-| Variable            | Default             | Purpose                                                         |
-| ------------------- | ------------------- | --------------------------------------------------------------- |
-| `NODE_ENV`          | `development`       | `development`, `test`, or `production`                          |
-| `LOG_LEVEL`         | `info`              | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, or `silent` |
-| `DATABASE_URL`      | Required            | PostgreSQL URL with a host and database name                    |
-| `POSTGRES_USER`     | Required by Compose | Local database administrator                                    |
-| `POSTGRES_PASSWORD` | Required by Compose | Local database password                                         |
-| `POSTGRES_DB`       | Required by Compose | Local database name                                             |
-| `POSTGRES_PORT`     | `5432`              | Host port, bound to `127.0.0.1`                                 |
+| Variable            | Default                        | Purpose                                                                    |
+| ------------------- | ------------------------------ | -------------------------------------------------------------------------- |
+| `NODE_ENV`          | `development`                  | `development`, `test`, or `production`                                     |
+| `LOG_LEVEL`         | `info`                         | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, or `silent`            |
+| `DATABASE_URL`      | Required                       | PostgreSQL URL with a host and database name                               |
+| `TEST_DATABASE_URL` | Required for integration tests | Dedicated test-instance admin connection; never falls back to DATABASE_URL |
+| `POSTGRES_USER`     | Required by Compose            | Local database administrator                                               |
+| `POSTGRES_PASSWORD` | Required by Compose            | Local database password                                                    |
+| `POSTGRES_DB`       | Required by Compose            | Local database name                                                        |
+| `POSTGRES_PORT`     | `5432`                         | Host port, bound to `127.0.0.1`                                            |
 
 `DATABASE_URL` validation checks URL structure, not connectivity. Both `postgres:`
 and `postgresql:` schemes are accepted. Keep the URL aligned with Compose settings;
 percent-encode credentials containing URL-reserved characters. Native Node env-file
 loading preserves values already supplied by the process environment.
 
-Only the composition root reads `process.env`; the validator takes an explicit
-input and returns a frozen configuration. Validation errors retain field names
+The application composition root, migration CLI, and integration-test setup read
+`process.env`; repositories and core code do not. Validators take explicit input
+and return validated settings. Validation errors retain field names
 only. Unknown environment variables are discarded.
 
 Pino emits JSON to stderr. Known secret keys, authorization/cookie headers, and
@@ -116,34 +128,38 @@ sensitive content in free-form messages or unrecognized fields.
 
 Compose uses the official `postgres:18` image, a health check, localhost-only
 port publication, and a named volume mounted at `/var/lib/postgresql`. The major
-version is fixed; patch image updates are intentional. No schema initialization or
-domain migrations are included.
+version is fixed; patch image updates are intentional. Apply the committed schema
+using `npm run db:migrate`; Compose itself does not apply migrations.
 
 The example credentials are public and for isolated local development only.
-The official image creates `POSTGRES_USER` as a superuser. Before application data
-access is introduced, provision separate least-privilege runtime and migration
-roles. Do not reuse this Compose setup as production deployment configuration.
+The official image creates `POSTGRES_USER` as a superuser. Use this local role for
+migrations and isolated test provisioning, and provision a restricted runtime
+role as described in the [database guide](docs/database.md). Tests exercise separate
+runtime credentials. Do not reuse this Compose setup as production deployment configuration.
 Changing initialization credentials does not update an existing database volume.
 `npm run db:down` preserves data; deleting the volume destroys it.
 
-No authenticated tenant context exists yet. Future use cases must authorize explicit
-permissions and pass trusted tenant scope into every tenant-owned query. Model
-arguments cannot establish identity or access. Cross-tenant lookups must not reveal
-another tenant's resources. Add real PostgreSQL integration tests for tenant
-isolation, constraints, transactions, and idempotency with the corresponding
-features. Every schema change requires a migration.
+Repositories require tenant scope in SQL, and cross-tenant lookups return null.
+A composite foreign key enforces project/client ownership. No authenticated
+tenant context exists yet: future use cases must authorize explicit permissions
+and supply trusted scope. Model arguments cannot establish identity or access.
+Every schema change requires a migration. Transactional audited mutations and
+their idempotency behavior remain later milestones.
 
 ## CI and verification
 
-GitHub Actions installs with `npm ci`, runs `npm run verify`, starts Compose,
-and executes an authenticated `SELECT 1` against PostgreSQL. Unit and process tests
-cover invalid/missing configuration, safe diagnostics, log redaction/filtering,
-and startup output/exit behavior. No database tables are created by these checks.
+GitHub Actions installs with `npm ci`, starts Compose on an assigned port, applies
+migrations, runs `npm run verify:all`, and checks migration-generation drift.
+Integration tests provision isolated databases, test restricted runtime
+credentials and two-tenant fixtures, and remove their temporary databases/roles.
+See [database conventions and testing](docs/database.md) for permissions,
+constraints, cleanup behavior, and Drizzle compatibility notes.
 
 ## Specifications
 
 - [Product specification](docs/product-spec.md)
 - [Domain model](docs/domain-model.md)
+- [Database conventions and testing](docs/database.md)
 - [Architecture](docs/architecture.md)
 - [MCP tool contracts](docs/mcp-tool-contracts.md)
 - [Implementation plan](docs/implementation-plan.md)

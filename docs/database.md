@@ -1,0 +1,208 @@
+# Milestone 1 database and tenancy
+
+## Scope and package boundaries
+
+Exactly six tables are implemented: tenants, users, tenant_memberships,
+developer_profiles, clients, and projects. The executable remains the Milestone 0
+bootstrap; it does not open a database connection or expose tools.
+
+- `domain/entities` defines portable records and status/role values.
+- `application/repositories` defines four explicit repository contracts.
+- `database/schema` contains Drizzle definitions; `database/client` owns pools.
+- `infrastructure/postgres` implements scoped queries and safe failures.
+- `test-support` provisions disposable databases and reusable two-tenant fixtures.
+
+No core package imports Drizzle. The database package may use core status values
+and record types. Test-only dependencies do not reverse production dependencies.
+
+## Schema decisions
+
+| Concern                       | Decision                                                                                                      |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| IDs                           | UUID primary keys with PostgreSQL `gen_random_uuid()` defaults                                                |
+| Timestamps                    | `timestamptz`, returned as JavaScript Dates; creation defaults use `now()`                                    |
+| Updates                       | No update API exists. Future writers must set `updated_at` explicitly; there is no hidden ORM hook or trigger |
+| Tenant/user/membership status | PostgreSQL enum: `active`, `inactive`                                                                         |
+| Membership role               | PostgreSQL enum: `owner`, `member`, `viewer`                                                                  |
+| Client status                 | PostgreSQL enum: `active`, `archived`                                                                         |
+| Project status                | PostgreSQL enum matching the five specified states                                                            |
+| Email identity                | Global unique index on `lower(email)`; stored values retain case and must be nonblank and trimmed             |
+| Slugs                         | Lowercase ASCII words separated by hyphens; globally unique for tenants, unique within a tenant for projects  |
+| Money                         | `numeric(12,2)`, nonnegative and finite; returned as a decimal string                                         |
+| Experience                    | Nonnegative `smallint`, explicitly supplied                                                                   |
+| JSONB collections             | Arrays of strings; database checks reject objects, non-string elements, and JSON null                         |
+| Availability                  | JSONB object; its business shape is intentionally not specified yet                                           |
+| Deletion                      | Foreign keys restrict deletion; no cascading tenant deletion                                                  |
+| Project dates                 | Both are optional; when both exist, completion cannot precede start                                           |
+
+Users are global identities and may belong to multiple tenants. Email uniqueness
+does not implement email verification, account linking, or authentication. Those
+decisions belong to the later authentication boundary.
+
+Profile rate and profile URLs are nullable: an unpublished rate differs from a
+zero rate, and a profile may have no public links. Project client, dates, and URLs
+are nullable for the reasons in the specification. Other fields are NOT NULL.
+Narrative fields may be empty strings; an absent client note defaults to an empty
+string. Arrays default to `[]`, and availability defaults to `{}`.
+
+No currency column was added to the specified profile model. Rates have no
+cross-currency interpretation in this milestone. Currency semantics must be
+settled before budget comparisons or pricing behavior.
+
+## Same-tenant project/client relationship
+
+`projects(tenant_id, client_id)` references `clients(tenant_id, id)`.
+A matching composite unique constraint on clients supports this foreign key.
+The extra unique index is justified by the ownership invariant, even though
+client IDs are globally unique.
+
+This prevents cross-tenant references during inserts, project updates, and client
+ownership changes, including direct SQL. PostgreSQL's default MATCH SIMPLE allows
+a null client, while the separate project-to-tenant foreign key still requires a
+valid tenant. There is no application-only precheck susceptible to a race.
+
+Other uniqueness constraints enforce tenant/user membership, one profile per
+tenant, and project slug uniqueness within a tenant.
+
+Indexes are supplied by primary keys and uniqueness constraints, plus
+`projects(tenant_id, status)` for the implemented filtered listing. A speculative
+client status index was not added: the current client API only looks up a scoped
+ID and uses the composite unique index. There are no search indexes.
+
+## Repository behavior
+
+| Contract                   | Operations                                                                                |
+| -------------------------- | ----------------------------------------------------------------------------------------- |
+| MembershipRepository       | `getByUser({ tenantId, userId })`                                                         |
+| DeveloperProfileRepository | `getByTenant({ tenantId })`                                                               |
+| ClientRepository           | `getById({ tenantId, clientId })`                                                         |
+| ProjectRepository          | `getById({ tenantId, projectId })`, `list({ tenantId, status?, limit })`, `create(input)` |
+
+Tenant and user repositories are deferred because no current use case needs them.
+Lookups return `null` for both nonexistent and cross-tenant identifiers. SQL
+contains tenant predicates before retrieval. Membership status is returned as
+data; repositories do not decide authorization.
+
+Project lists require a limit from 1 through 100 and are ordered by UUID. They are
+bounded subsets, not a pagination or search API. Creation requires tenant scope
+and explicit project fields; IDs and timestamps are assigned by PostgreSQL.
+
+The create operation is one atomic INSERT. The composite foreign key enforces
+ownership without a separate transaction or check-then-write race. Duplicate
+tenant slugs fail with CONFLICT, including concurrent inserts. This is a storage
+primitive, not an authenticated or audited user-facing mutation. No automatic
+retry, idempotency contract, or MCP write operation is introduced here.
+
+Infrastructure maps driver failures to `RepositoryError` with one of
+`CONFLICT`, `INVALID_REFERENCE`, `INVALID_INPUT`, or `UNAVAILABLE`. Missing
+and cross-tenant client references share the same safe failure. Raw SQL, driver
+details, and causes do not cross this boundary. Final application/MCP error
+mapping remains deferred.
+
+Every caller must eventually supply tenant IDs from authenticated server context.
+Passing a tenant ID is not authorization. There is no row-level security policy:
+the protection demonstrated here is scoped repository SQL and database ownership
+constraints, not protection against arbitrary SQL using compromised credentials.
+
+## Migrations
+
+The initial migration is `packages/database/migrations/0000_tenancy_foundation.sql`.
+Its generated snapshot and journal are committed alongside it.
+
+```sh
+npm ci
+npm run db:generate -- --name=descriptive_change
+npm run db:check
+npm run db:migrate
+```
+
+Generation loads the TypeScript schema and creates SQL plus metadata. Review and
+commit all three; do not edit an applied migration. `db:check` validates Drizzle's
+migration history. `db:migrate` uses the validated `DATABASE_URL`, applies SQL
+through Drizzle's transactional migrator, and closes its pool. It can be rerun
+without reapplying recorded migrations. Run one migration process at a time.
+Schema push is not part of this workflow.
+
+Database URLs are supplied per process. Migration commands require an owner/migration
+role. Future application processes must use a separate restricted role. Deployment
+must include the migrations directory beside the database package's `dist` directory.
+
+For a local runtime role, provision privileges outside schema migrations so
+environment-specific credentials are never committed. For example, using psql
+against the target database as its administrator:
+
+```sql
+CREATE ROLE beloveddev_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+\password beloveddev_runtime
+GRANT USAGE ON SCHEMA public TO beloveddev_runtime;
+GRANT SELECT ON tenant_memberships, developer_profiles, clients, projects TO beloveddev_runtime;
+GRANT INSERT ON projects TO beloveddev_runtime;
+```
+
+Supply that role's credentials to the future application, and keep the owner
+credentials for migrations. The current test helper provisions equivalent
+restricted runtime permissions and verifies them.
+
+## Real PostgreSQL integration tests
+
+`TEST_DATABASE_URL` must explicitly point to a dedicated local/CI administrative
+database on the test PostgreSQL instance. There is no fallback to `DATABASE_URL`.
+Tests require CREATE DATABASE and CREATE ROLE privileges. Never use production
+infrastructure for this test workflow.
+
+Each suite creates a uniquely named empty database, applies the committed
+migration, and creates a separate non-superuser runtime login. Administrative
+connections seed and clean fixtures in transactions. Repository calls use the
+restricted login. The fixture relationships and content are fixed; UUID namespaces
+vary to avoid collisions. Every test seeds its own two tenants and removes only
+their data. Tests have no execution-order dependency.
+
+Teardown closes pools, drops only the database generated by that suite, and removes
+its generated role. It never truncates a supplied database. If a test process is
+forcibly killed, temporary `beloveddev_test_*` databases/roles may need manual
+inspection and cleanup on the dedicated test instance.
+
+```sh
+npm run test:integration
+npm run verify:all
+```
+
+`verify` remains the fast database-independent check; `verify:all` adds migration
+history checks and integration tests. Integration coverage includes fresh migration
+application, repeat application, reproduction on another empty database, Drizzle
+column/constraint/index agreement, restricted privileges, two-tenant reads/writes,
+concurrent slug conflicts, and actual PostgreSQL constraints. No PostgreSQL mocks
+are used.
+
+For this machine, use an assigned host port without touching services on 5432 or 55432. From PowerShell, the public local example credentials can be used as follows:
+
+```powershell
+$env:POSTGRES_PORT = '0'
+docker compose --env-file .env.example up -d --wait
+$databaseEndpoint = (docker compose --env-file .env.example port postgres 5432).Trim()
+$env:DATABASE_URL = "postgresql://beloveddev:beloveddev_local_only@$databaseEndpoint/beloveddev"
+$env:TEST_DATABASE_URL = $env:DATABASE_URL
+npm run db:migrate
+npm run verify:all
+docker compose --env-file .env.example down
+```
+
+The `5432` argument above identifies the container's internal service port; the
+host port comes from Docker. The same approach runs in CI. With a fixed host port,
+update the two URLs and `POSTGRES_PORT` together in your untracked `.env`.
+
+## Tooling compatibility
+
+Drizzle 0.45.3 declaration files include incompatible optional-driver declarations.
+`skipLibCheck` is enabled only in database, infrastructure, test-support, and the
+aggregate test/configuration typecheck. Source code still uses all strict flags.
+Domain and application builds retain declaration checking. No unrelated database
+drivers were installed.
+
+Drizzle Kit's legacy loader includes an older esbuild. A targeted npm override
+uses the patched 0.25 line for that nested dependency; migration generation is
+verified with the override. Review these workarounds when upgrading Drizzle.
+
+References: [Drizzle constraints](https://orm.drizzle.team/docs/indexes-constraints),
+[Drizzle migration generation](https://orm.drizzle.team/docs/drizzle-kit-generate),
+and [node-postgres pool lifecycle](https://node-postgres.com/apis/pool).

@@ -121,6 +121,13 @@ Project status must be constrained.
 
 A repository query cannot accidentally read a project belonging to another tenant.
 
+The Milestone 1 implementation includes the six tables above, the initial Drizzle
+migration, four explicit repository contracts/adapters, and disposable PostgreSQL
+test databases with restricted runtime credentials. Tenant/User repositories,
+authentication, and application use cases are deferred until needed.
+See [database conventions and verification](database.md) for the implemented
+schema decisions and commands.
+
 ---
 
 ## 4. Milestone 2 — Project Knowledge
@@ -518,8 +525,11 @@ clean install. CI additionally starts PostgreSQL via Docker Compose and executes
 an authenticated `SELECT 1`. See the README for local environment setup and
 `db:up`/`db:down` commands.
 
-Add `test:integration` when Milestone 1 introduces actual database repositories;
-Milestone 0 creates no domain tables, migration scaffolding, or database mocks.
+Milestone 1 adds `npm run test:integration` and `npm run verify:all`.
+The latter runs the existing checks, validates Drizzle migration history, and runs
+real PostgreSQL integration tests. CI additionally applies the migration to its
+development database and checks that generation has no schema drift. Test
+databases and runtime roles are disposable; no database mocks are used.
 
 ## 13. Change Discipline
 

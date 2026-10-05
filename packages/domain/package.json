@@ -2,5 +2,11 @@
   "name": "@beloveddev/domain",
   "version": "0.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": {
+    "./entities": {
+      "types": "./dist/entities.d.ts",
+      "default": "./dist/entities.js"
+    }
+  }
 }

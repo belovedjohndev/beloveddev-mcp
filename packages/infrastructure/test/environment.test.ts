@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { EnvironmentValidationError, parseEnvironment } from '../src/environment.js';
+import {
+  EnvironmentValidationError,
+  parseEnvironment,
+  parseTestDatabaseUrl,
+} from '../src/environment.js';
 
 const databaseUrl = 'postgresql://user:private-password@localhost:5432/beloveddev';
 
@@ -63,6 +67,21 @@ describe('environment validation', () => {
   it.each(['NODE_ENV', 'LOG_LEVEL'])('rejects an empty %s instead of applying a default', (key) => {
     expect(() => parseEnvironment({ DATABASE_URL: databaseUrl, [key]: '' })).toThrow(
       EnvironmentValidationError,
+    );
+  });
+});
+
+describe('integration database configuration', () => {
+  it('requires an explicit TEST_DATABASE_URL and never falls back to application settings', () => {
+    expect(() => parseTestDatabaseUrl({ DATABASE_URL: databaseUrl })).toThrow('TEST_DATABASE_URL');
+  });
+  it('accepts a configured nondefault host port', () => {
+    const url = 'postgresql://user:password@localhost:32123/test_admin';
+    expect(parseTestDatabaseUrl({ TEST_DATABASE_URL: url })).toBe(url);
+  });
+  it('discards invalid test configuration values from errors', () => {
+    expect(() => parseTestDatabaseUrl({ TEST_DATABASE_URL: 'invalid-private-secret' })).toThrow(
+      'Invalid environment variables: TEST_DATABASE_URL',
     );
   });
 });

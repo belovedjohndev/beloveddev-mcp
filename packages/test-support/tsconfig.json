@@ -8,14 +8,10 @@
     "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
     "skipLibCheck": true
   },
+  "include": ["src/**/*.ts"],
   "references": [
-    {
-      "path": "../application"
-    },
     {
       "path": "../database"
     }
-  ],
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts"]
+  ]
 }

@@ -2,5 +2,18 @@
   "name": "@beloveddev/application",
   "version": "0.0.0",
   "private": true,
-  "type": "module"
+  "type": "module",
+  "exports": {
+    "./repositories": {
+      "types": "./dist/repositories.d.ts",
+      "import": "./dist/repositories.js"
+    },
+    "./repository-error": {
+      "types": "./dist/repository-error.d.ts",
+      "import": "./dist/repository-error.js"
+    }
+  },
+  "dependencies": {
+    "@beloveddev/domain": "0.0.0"
+  }
 }

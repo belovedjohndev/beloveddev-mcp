@@ -11,10 +11,32 @@
     "./logger": {
       "types": "./dist/logger.d.ts",
       "import": "./dist/logger.js"
+    },
+    "./postgres/membership-repository": {
+      "types": "./dist/postgres/membership-repository.d.ts",
+      "import": "./dist/postgres/membership-repository.js"
+    },
+    "./postgres/developer-profile-repository": {
+      "types": "./dist/postgres/developer-profile-repository.d.ts",
+      "import": "./dist/postgres/developer-profile-repository.js"
+    },
+    "./postgres/client-repository": {
+      "types": "./dist/postgres/client-repository.d.ts",
+      "import": "./dist/postgres/client-repository.js"
+    },
+    "./postgres/project-repository": {
+      "types": "./dist/postgres/project-repository.d.ts",
+      "import": "./dist/postgres/project-repository.js"
     }
   },
   "dependencies": {
+    "@beloveddev/application": "0.0.0",
+    "@beloveddev/database": "0.0.0",
+    "drizzle-orm": "0.45.3",
     "pino": "10.4.0",
     "zod": "^4.1.13"
+  },
+  "devDependencies": {
+    "@beloveddev/test-support": "0.0.0"
   }
 }

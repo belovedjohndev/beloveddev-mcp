@@ -1,5 +1,22 @@
 # BelovedDev MCP V1 — Domain Model
 
+## Milestone 1 concrete storage decisions
+
+Only tenants, users, tenant_memberships, developer_profiles, clients, and projects
+are implemented. All later entities below remain proposed.
+
+Tenant, user, and membership statuses are active/inactive; clients are
+active/archived. Email uniqueness is global and case-insensitive, without any
+authentication or account-linking behavior. Project/client ownership is enforced
+by a composite foreign key. Profile rates use exact decimal strings and may be
+null when unpublished; profile links are nullable when absent. Currency semantics
+are not yet modeled. Availability is a JSON object, and the collection fields are
+arrays of strings checked by PostgreSQL.
+
+See [database conventions](database.md) for nullability, indexes, migration
+workflow, and the distinction between scoped repository access and future
+authenticated tenant context.
+
 ## 1. Domain Boundary
 
 V1 covers four primary domains:

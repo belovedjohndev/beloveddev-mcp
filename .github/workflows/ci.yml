@@ -11,6 +11,8 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      POSTGRES_PORT: '0'
     steps:
       - uses: actions/checkout@v6
         with:
@@ -20,19 +22,20 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
-      - run: npm run verify
-      - name: Prepare local database configuration
-        run: cp .env.example .env
-      - name: Validate Compose and start PostgreSQL
+      - name: Start PostgreSQL on an assigned localhost port
         run: |
+          cp .env.example .env
           docker compose config --quiet
           npm run db:up
-      - name: Verify PostgreSQL accepts a query
-        run: >-
-          docker compose exec -T postgres sh -eu -c
-          'export PGPASSWORD="$POSTGRES_PASSWORD";
-          psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
-          -v ON_ERROR_STOP=1 -c "SELECT 1;"'
+          endpoint=$(docker compose port postgres 5432)
+          echo "DATABASE_URL=postgresql://beloveddev:beloveddev_local_only@$endpoint/beloveddev" >> "$GITHUB_ENV"
+          echo "TEST_DATABASE_URL=postgresql://beloveddev:beloveddev_local_only@$endpoint/beloveddev" >> "$GITHUB_ENV"
+      - run: npm run db:migrate
+      - run: npm run verify:all
+      - name: Verify migration generation has no drift
+        run: |
+          npm run db:generate
+          test -z "$(git status --porcelain -- packages/database/migrations)"
       - name: Stop PostgreSQL
         if: always()
         run: docker compose --env-file .env.example down --volumes
