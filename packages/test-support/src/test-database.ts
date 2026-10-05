@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { openDatabase, type DatabaseConnection } from '@beloveddev/database/client';
 import { migrateDatabase } from '@beloveddev/database/migrate';
 
-export async function createTestDatabase(administratorUrl: string) {
+export async function createTestDatabase(
+  administratorUrl: string,
+  options: { beforeMigrate?: (connection: DatabaseConnection) => Promise<void> } = {},
+) {
   const suffix = randomUUID().replaceAll('-', '');
   const databaseName = `beloveddev_test_${suffix}`;
   const roleName = `${databaseName}_runtime`;
@@ -50,11 +53,12 @@ export async function createTestDatabase(administratorUrl: string) {
     if (identity.rows[0]?.name !== databaseName) {
       throw new Error('Refusing to migrate an unexpected test database.');
     }
+    await options.beforeMigrate?.(admin);
     await migrateDatabase(admin.db);
     await admin.pool.query(`REVOKE CREATE ON SCHEMA public FROM PUBLIC`);
     await admin.pool.query(`GRANT USAGE ON SCHEMA public TO "${roleName}"`);
     await admin.pool.query(
-      `GRANT SELECT ON tenant_memberships, developer_profiles, clients, projects TO "${roleName}"`,
+      `GRANT SELECT ON tenant_memberships, developer_profiles, clients, projects, project_evidence, project_blockers, project_notes TO "${roleName}"`,
     );
     await admin.pool.query(`GRANT INSERT ON projects TO "${roleName}"`);
     url.username = roleName;

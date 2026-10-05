@@ -27,6 +27,18 @@
     "./postgres/project-repository": {
       "types": "./dist/postgres/project-repository.d.ts",
       "import": "./dist/postgres/project-repository.js"
+    },
+    "./postgres/evidence-repository": {
+      "types": "./dist/postgres/evidence-repository.d.ts",
+      "import": "./dist/postgres/evidence-repository.js"
+    },
+    "./postgres/blocker-repository": {
+      "types": "./dist/postgres/blocker-repository.d.ts",
+      "import": "./dist/postgres/blocker-repository.js"
+    },
+    "./postgres/note-repository": {
+      "types": "./dist/postgres/note-repository.d.ts",
+      "import": "./dist/postgres/note-repository.js"
     }
   },
   "dependencies": {

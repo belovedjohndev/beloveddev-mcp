@@ -4,6 +4,9 @@ import {
   clients,
   developerProfiles,
   projects,
+  projectEvidence,
+  projectBlockers,
+  projectNotes,
   tenantMemberships,
   tenants,
   users,
@@ -94,6 +97,9 @@ export async function removeTenantFixtures(database: Database, fixture: TenantFi
   const tenantIds = [fixture.a.tenantId, fixture.b.tenantId];
   const userIds = [fixture.a.userId, fixture.b.userId];
   await database.transaction(async (transaction) => {
+    await transaction.delete(projectNotes).where(inArray(projectNotes.tenantId, tenantIds));
+    await transaction.delete(projectBlockers).where(inArray(projectBlockers.tenantId, tenantIds));
+    await transaction.delete(projectEvidence).where(inArray(projectEvidence.tenantId, tenantIds));
     await transaction.delete(projects).where(inArray(projects.tenantId, tenantIds));
     await transaction.delete(clients).where(inArray(clients.tenantId, tenantIds));
     await transaction

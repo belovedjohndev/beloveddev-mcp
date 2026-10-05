@@ -1,13 +1,14 @@
-# Milestone 1 database and tenancy
+# Database, tenancy, and project knowledge
 
 ## Scope and package boundaries
 
-Exactly six tables are implemented: tenants, users, tenant_memberships,
-developer_profiles, clients, and projects. The executable remains the Milestone 0
+Exactly nine tables are implemented: tenants, users, tenant_memberships,
+developer_profiles, clients, projects, project_evidence, project_blockers, and
+project_notes. The executable remains the Milestone 0
 bootstrap; it does not open a database connection or expose tools.
 
 - `domain/entities` defines portable records and status/role values.
-- `application/repositories` defines four explicit repository contracts.
+- `application/repositories` defines seven explicit repository contracts.
 - `database/schema` contains Drizzle definitions; `database/client` owns pools.
 - `infrastructure/postgres` implements scoped queries and safe failures.
 - `test-support` provisions disposable databases and reusable two-tenant fixtures.
@@ -42,7 +43,7 @@ decisions belong to the later authentication boundary.
 Profile rate and profile URLs are nullable: an unpublished rate differs from a
 zero rate, and a profile may have no public links. Project client, dates, and URLs
 are nullable for the reasons in the specification. Other fields are NOT NULL.
-Narrative fields may be empty strings; an absent client note defaults to an empty
+Milestone 1 narrative fields may be empty strings; an absent client note defaults to an empty
 string. Arrays default to `[]`, and availability defaults to `{}`.
 
 No currency column was added to the specified profile model. Rates have no
@@ -64,10 +65,68 @@ valid tenant. There is no application-only precheck susceptible to a race.
 Other uniqueness constraints enforce tenant/user membership, one profile per
 tenant, and project slug uniqueness within a tenant.
 
-Indexes are supplied by primary keys and uniqueness constraints, plus
+Milestone 1 indexes are supplied by primary keys and uniqueness constraints, plus
 `projects(tenant_id, status)` for the implemented filtered listing. A speculative
 client status index was not added: the current client API only looks up a scoped
 ID and uses the composite unique index. There are no search indexes.
+
+## Project knowledge invariants and indexes
+
+All three child tables require an existing tenant and a project in that same tenant.
+Their `(tenant_id, project_id)` foreign keys reference a new
+`UNIQUE(tenant_id, id)` constraint on projects. This repeats the project/client
+strategy and prevents invalid inserts, child updates, parent reassignment, and
+parent deletion. All foreign keys use restricted deletion.
+
+Evidence type, blocker severity/status, and note category are PostgreSQL enums
+matching the domain model. Evidence title/summary/details, blocker
+title/description, and note content/idempotency key are NOT NULL and must contain
+a non-whitespace character. PostgreSQL POSIX whitespace checks reject empty strings,
+spaces, tabs, and line breaks. Evidence skills, capabilities, and business outcomes
+use JSONB string-array checks and default to `[]`. New evidence checks use strict
+JSONPath to reject nested arrays, including empty arrays. The unchanged Milestone 1
+checks use lax JSONPath, which can unwrap nested arrays; tightening those existing
+profile/stack constraints requires a separate migration outside this milestone.
+All specified fields are required except blocker `resolved_at`.
+
+Blockers enforce both directions of the resolution invariant:
+
+- `open` requires `resolved_at IS NULL`.
+- `resolved` requires `resolved_at IS NOT NULL`.
+- When present, `resolved_at >= blocked_since`.
+
+A future writer must change status and resolution timestamp in the same statement.
+Blockers default to open and `blocked_since = now()`; severity is explicit.
+These are persistent invariants, not a resolution workflow.
+
+Notes reference the global author user and have a composite foreign key from
+`(tenant_id, author_user_id)` to `tenant_memberships(tenant_id, user_id)`.
+Membership existence is a stable ownership invariant and belongs in PostgreSQL,
+avoiding a check-then-insert race. Membership activity and permissions depend on
+trusted request context and belong in the future application mutation.
+Inactive memberships can retain history; referenced memberships cannot be deleted.
+The database alone does not authorize note creation.
+
+`UNIQUE(tenant_id, author_user_id, idempotency_key)` applies across projects.
+Different authors or tenants may reuse a key. No note write repository, retry
+result handling, auditing, or update/delete API is added. The runtime test role
+has only SELECT privileges on the three knowledge tables; there is no append-only
+trigger preventing administrative updates.
+
+Indexes follow the implemented reads:
+
+| Table            | Index columns and order                                  |
+| ---------------- | -------------------------------------------------------- |
+| project_evidence | tenant_id, project_id, created_at DESC, id DESC          |
+| project_notes    | tenant_id, project_id, created_at DESC, id DESC          |
+| project_blockers | tenant_id, status, blocked_since ASC, id ASC             |
+| project_blockers | tenant_id, project_id, status, blocked_since ASC, id ASC |
+
+Blocker severity is an optional predicate; no additional speculative index is
+introduced. Descending queries explicitly use NULLS LAST to match their indexes;
+the indexed fields are NOT NULL. UUIDs supply a stable tie-breaker. Evidence keeps
+ordinary text and JSONB fields suitable for later PostgreSQL FTS. No search vector,
+GIN index, normalization policy, or search query is implemented yet.
 
 ## Repository behavior
 
@@ -77,6 +136,22 @@ ID and uses the composite unique index. There are no search indexes.
 | DeveloperProfileRepository | `getByTenant({ tenantId })`                                                               |
 | ClientRepository           | `getById({ tenantId, clientId })`                                                         |
 | ProjectRepository          | `getById({ tenantId, projectId })`, `list({ tenantId, status?, limit })`, `create(input)` |
+
+The new read-only contracts are:
+
+| Contract           | Method                                                 | Ordering                 |
+| ------------------ | ------------------------------------------------------ | ------------------------ |
+| EvidenceRepository | `listByProject({ tenantId, projectId, limit })`        | createdAt DESC, id DESC  |
+| BlockerRepository  | `listOpen({ tenantId, projectId?, severity?, limit })` | blockedSince ASC, id ASC |
+| NoteRepository     | `listRecentByProject({ tenantId, projectId, limit })`  | createdAt DESC, id DESC  |
+
+Evidence returns full records including summary and details. Blocker reads always
+exclude resolved records. Project and severity filters combine with tenant scope
+using AND. All three methods require integer limits from 1 through 100 and return
+empty arrays for nonexistent or foreign-tenant projects. Malformed UUIDs/enums and
+invalid limits map to safe INVALID_INPUT errors; connection failures map to
+UNAVAILABLE. Each read is a single statement with no extra transaction or retry.
+These methods return bounded subsets, without cursors or search semantics.
 
 Tenant and user repositories are deferred because no current use case needs them.
 Lookups return `null` for both nonexistent and cross-tenant identifiers. SQL
@@ -107,7 +182,16 @@ constraints, not protection against arbitrary SQL using compromised credentials.
 ## Migrations
 
 The initial migration is `packages/database/migrations/0000_tenancy_foundation.sql`.
-Its generated snapshot and journal are committed alongside it.
+Its generated snapshot is unchanged. Milestone 2 adds
+`packages/database/migrations/0001_project_knowledge.sql`, its generated snapshot,
+and a journal entry. The new SQL creates the project composite unique constraint
+before adding child foreign keys: Drizzle Kit initially emitted that prerequisite
+last, so the new migration's statement order was corrected during review.
+The migration adds no data backfill and preserves existing Milestone 1 rows.
+
+Adding the project unique constraint builds an index and takes a table lock.
+Schedule migrations appropriately on a populated deployment; the local tests do
+not measure production migration duration.
 
 ```sh
 npm ci
@@ -135,7 +219,8 @@ against the target database as its administrator:
 CREATE ROLE beloveddev_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
 \password beloveddev_runtime
 GRANT USAGE ON SCHEMA public TO beloveddev_runtime;
-GRANT SELECT ON tenant_memberships, developer_profiles, clients, projects TO beloveddev_runtime;
+GRANT SELECT ON tenant_memberships, developer_profiles, clients, projects,
+  project_evidence, project_blockers, project_notes TO beloveddev_runtime;
 GRANT INSERT ON projects TO beloveddev_runtime;
 ```
 
@@ -151,7 +236,7 @@ Tests require CREATE DATABASE and CREATE ROLE privileges. Never use production
 infrastructure for this test workflow.
 
 Each suite creates a uniquely named empty database, applies the committed
-migration, and creates a separate non-superuser runtime login. Administrative
+migration chain, and creates a separate non-superuser runtime login. Administrative
 connections seed and clean fixtures in transactions. Repository calls use the
 restricted login. The fixture relationships and content are fixed; UUID namespaces
 vary to avoid collisions. Every test seeds its own two tenants and removes only
@@ -171,7 +256,12 @@ npm run verify:all
 history checks and integration tests. Integration coverage includes fresh migration
 application, repeat application, reproduction on another empty database, Drizzle
 column/constraint/index agreement, restricted privileges, two-tenant reads/writes,
-concurrent slug conflicts, and actual PostgreSQL constraints. No PostgreSQL mocks
+concurrent slug/note-key conflicts, and actual PostgreSQL constraints. An upgrade
+test first applies only the committed Milestone 1 migration, seeds all six original
+tables, then runs the complete chain and verifies unchanged rows and schema
+agreement with a fresh database. Knowledge tests cover required fields, enums,
+arrays, same-tenant references, author membership, idempotency, resolution,
+repository ordering/limits/filters, and safe invalid-input failures. No PostgreSQL mocks
 are used.
 
 For this machine, use an assigned host port without touching services on 5432 or 55432. From PowerShell, the public local example credentials can be used as follows:

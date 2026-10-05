@@ -5,13 +5,14 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 1
+## Current status: Milestone 2
 
-The database and tenancy foundation implements six tables, a reviewed Drizzle
-migration, tenant-scoped repositories, and real PostgreSQL integration tests.
+The database foundation implements nine tables through two Drizzle migrations,
+including project evidence, blockers, and notes. Seven explicit repository
+contracts provide tenant-scoped access, verified against real PostgreSQL.
 The executable still validates configuration, logs, and exits; it does not open
 a database connection or start an MCP server. Authentication, application use
-cases, Milestone 2 entities, and MCP tools remain deferred.
+cases, evidence search, opportunities, and MCP tools remain deferred.
 
 ## Requirements
 
@@ -28,7 +29,7 @@ Run commands from the repository root.
    - PowerShell: `Copy-Item .env.example .env`
    - POSIX shell: `cp .env.example .env`
 3. Start PostgreSQL: `npm run db:up`.
-4. Apply the initial schema: `npm run db:migrate`.
+4. Apply the migration chain: `npm run db:migrate`.
 5. Check everything, including real PostgreSQL tests: `npm run verify:all`.
 6. Run the foundation bootstrap: `npm start`.
 
@@ -139,8 +140,10 @@ runtime credentials. Do not reuse this Compose setup as production deployment co
 Changing initialization credentials does not update an existing database volume.
 `npm run db:down` preserves data; deleting the volume destroys it.
 
-Repositories require tenant scope in SQL, and cross-tenant lookups return null.
-A composite foreign key enforces project/client ownership. No authenticated
+Repositories require tenant scope in SQL. Cross-tenant lookups return null and
+knowledge listings return empty arrays. Composite foreign keys enforce both
+project/client and project-child ownership. Notes require an author membership
+and a unique tenant/author/idempotency key; blocker resolution is database constrained. No authenticated
 tenant context exists yet: future use cases must authorize explicit permissions
 and supply trusted scope. Model arguments cannot establish identity or access.
 Every schema change requires a migration. Transactional audited mutations and

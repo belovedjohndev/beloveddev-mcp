@@ -167,7 +167,20 @@ The database can represent:
 - what is blocking the project;
 - append-only contextual notes.
 
-No MCP mutation is exposed yet.
+Milestone 2 is implemented with migration `0001_project_knowledge.sql`.
+It adds exactly these three tables, project ownership foreign keys, constrained
+enums/text/JSONB, the blocker resolution invariant, and note author membership
+and idempotency constraints. Evidence and notes have bounded newest-first
+project reads; open blockers have bounded oldest-first reads with optional
+project and severity filters. UUIDs break timestamp ties.
+
+Real PostgreSQL tests cover constraints, both directions of tenant isolation,
+filters, ordering, bounds, safe failures, populated Milestone 1 upgrades, and
+reproducible full-chain migrations on fresh databases. See
+[database conventions](database.md) for the concrete decisions.
+
+No MCP transport/tools, opportunity model, full-text search, authentication,
+or note mutation/audit use case is implemented. Milestone 3 has not started.
 
 ---
 

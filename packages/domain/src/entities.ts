@@ -88,3 +88,71 @@ export interface Project {
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
+
+export const evidenceTypes = [
+  'feature',
+  'architecture',
+  'integration',
+  'business_outcome',
+  'performance',
+  'security',
+  'reliability',
+  'automation',
+  'client_result',
+] as const;
+export const blockerSeverities = ['low', 'medium', 'high', 'critical'] as const;
+export const blockerStatuses = ['open', 'resolved'] as const;
+export const noteCategories = [
+  'general',
+  'decision',
+  'requirement',
+  'client_feedback',
+  'technical',
+  'follow_up',
+  'research',
+] as const;
+
+export type EvidenceType = (typeof evidenceTypes)[number];
+export type BlockerSeverity = (typeof blockerSeverities)[number];
+export type BlockerStatus = (typeof blockerStatuses)[number];
+export type NoteCategory = (typeof noteCategories)[number];
+
+export interface ProjectEvidence {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly projectId: string;
+  readonly type: EvidenceType;
+  readonly title: string;
+  readonly summary: string;
+  readonly details: string;
+  readonly skills: readonly string[];
+  readonly capabilities: readonly string[];
+  readonly businessOutcomes: readonly string[];
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+export interface ProjectBlocker {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly projectId: string;
+  readonly title: string;
+  readonly description: string;
+  readonly severity: BlockerSeverity;
+  readonly status: BlockerStatus;
+  readonly blockedSince: Date;
+  readonly resolvedAt: Date | null;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+export interface ProjectNote {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly projectId: string;
+  readonly authorUserId: string;
+  readonly category: NoteCategory;
+  readonly content: string;
+  readonly idempotencyKey: string;
+  readonly createdAt: Date;
+}

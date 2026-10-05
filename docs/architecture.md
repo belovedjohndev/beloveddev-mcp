@@ -1,17 +1,18 @@
 # BelovedDev MCP V1 — Architecture
 
-## Milestone 1 implementation
+## Milestones 1 and 2 implementation
 
 The executable remains a configuration/logging bootstrap with no database
 connection or MCP transport. Database setup is an explicit migration CLI action.
 
 The domain package defines portable records and status values; the application
-package defines membership, profile, client, and project repository ports.
+package defines membership, profile, client, project, evidence, blocker, and note
+repository ports.
 Infrastructure implements them with tenant predicates in Drizzle queries.
 The database package owns schema, migrations, and pool lifecycle. Core packages
 do not depend on persistence or transport. MCP and shared remain metadata-only.
 
-Missing and cross-tenant lookups return null. Repository errors expose safe
+Missing and cross-tenant lookups return null; knowledge listings return empty arrays. Repository errors expose safe
 categories without raw SQL causes. Project creation is one atomic INSERT with a
 composite client ownership foreign key. It is an internal persistence operation;
 authenticated, permission-checked, audited user-facing mutations remain deferred.
@@ -24,6 +25,14 @@ RLS policy or claim of protection against arbitrary SQL using compromised creden
 See [database conventions](database.md) for concrete schema choices, migration
 commands, test isolation, and tooling compatibility. The remaining sections
 describe the target V1 architecture.
+
+Milestone 2 adds read-only project knowledge adapters. Each SQL statement includes
+tenant scope, filters, a deterministic order, and a required 1–100 limit. No new
+transaction abstraction or use case is needed for these single-statement reads.
+Composite foreign keys protect project-child ownership and note author membership.
+Membership existence is database enforced; active membership and permission checks
+remain future application responsibilities. The note uniqueness constraint is
+storage groundwork, not the Milestone 7 retry/audit workflow.
 
 ## 1. Architectural Goal
 
@@ -366,8 +375,10 @@ Milestone 1 enforces project/client ownership with a composite foreign key:
 `projects(tenant_id, client_id)` references `clients(tenant_id, id)`. The supporting
 composite unique constraint is justified by this invariant. A null client is
 allowed, while the separate project tenant foreign key remains mandatory.
-Application/repository logic must preserve these constraints as new relationships
-are introduced.
+Milestone 2 follows the same strategy for evidence, blockers, and notes:
+`(tenant_id, project_id)` references the new `projects(tenant_id, id)` unique key.
+Notes additionally reference the author user and their tenant membership. These
+constraints apply to direct SQL as well as future application writes.
 
 ## 9. Authentication
 

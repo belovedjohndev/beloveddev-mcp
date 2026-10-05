@@ -1,9 +1,16 @@
 import { randomUUID } from 'node:crypto';
+import { copyFile, mkdir, mkdtemp, readFile, rmdir, unlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { migrateDatabase } from '@beloveddev/database/migrate';
 import {
   clients,
   developerProfiles,
   projects,
+  projectEvidence,
+  projectBlockers,
+  projectNotes,
   tenantMemberships,
   tenants,
   users,
@@ -18,7 +25,17 @@ import {
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-const tables = [tenants, users, tenantMemberships, developerProfiles, clients, projects];
+const tables = [
+  tenants,
+  users,
+  tenantMemberships,
+  developerProfiles,
+  clients,
+  projects,
+  projectEvidence,
+  projectBlockers,
+  projectNotes,
+];
 
 async function schemaSignature(database: TestDatabase) {
   const columns = await database.admin.pool.query<{
@@ -37,7 +54,15 @@ async function schemaSignature(database: TestDatabase) {
   const constraints = await database.admin.pool.query<{ conname: string; definition: string }>(
     "SELECT conname, pg_get_constraintdef(oid) AS definition FROM pg_constraint WHERE connamespace = 'public'::regnamespace ORDER BY conname",
   );
-  return { columns: columns.rows, indexes: indexes.rows, constraints: constraints.rows };
+  const enums = await database.admin.pool.query<{ typname: string; enumlabel: string }>(
+    "SELECT t.typname, e.enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typnamespace = 'public'::regnamespace ORDER BY t.typname, e.enumsortorder",
+  );
+  return {
+    columns: columns.rows,
+    indexes: indexes.rows,
+    constraints: constraints.rows,
+    enums: enums.rows,
+  };
 }
 
 describe('real PostgreSQL migration and constraints', () => {
@@ -62,7 +87,7 @@ describe('real PostgreSQL migration and constraints', () => {
     await database?.close();
   });
 
-  it('applies to an empty database, creates exactly six tables, and can run again safely', async () => {
+  it('applies to an empty database, creates exactly nine tables, and can run again safely', async () => {
     expect(initiallyEmpty).toBe(true);
     const result = await database.admin.pool.query<{ table_name: string }>(
       "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
@@ -70,6 +95,9 @@ describe('real PostgreSQL migration and constraints', () => {
     expect(result.rows.map((row) => row.table_name)).toEqual([
       'clients',
       'developer_profiles',
+      'project_blockers',
+      'project_evidence',
+      'project_notes',
       'projects',
       'tenant_memberships',
       'tenants',
@@ -79,7 +107,7 @@ describe('real PostgreSQL migration and constraints', () => {
     const journal = await database.admin.pool.query<{ count: number }>(
       'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
     );
-    expect(journal.rows).toEqual([{ count: 1 }]);
+    expect(journal.rows).toEqual([{ count: 2 }]);
   });
 
   it.each(tables.map((table) => [getTableConfig(table).name, table] as const))(
@@ -135,6 +163,74 @@ describe('real PostgreSQL migration and constraints', () => {
       expect(await schemaSignature(second)).toEqual(await schemaSignature(database));
     } finally {
       await second.close();
+    }
+  });
+
+  it('upgrades populated Milestone 1 without changing existing rows', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'beloveddev-m1-upgrade-'));
+    let upgraded: TestDatabase | undefined;
+    const originalRows: Record<string, unknown[]> = {};
+    const legacyTables = [
+      'tenants',
+      'users',
+      'tenant_memberships',
+      'developer_profiles',
+      'clients',
+      'projects',
+    ];
+    try {
+      await mkdir(join(folder, 'meta'));
+      const journal = JSON.parse(
+        await readFile(new URL('../migrations/meta/_journal.json', import.meta.url), 'utf8'),
+      ) as { entries: unknown[] };
+      journal.entries = journal.entries.slice(0, 1);
+      await writeFile(join(folder, 'meta', '_journal.json'), JSON.stringify(journal));
+      await copyFile(
+        new URL('../migrations/0000_tenancy_foundation.sql', import.meta.url),
+        join(folder, '0000_tenancy_foundation.sql'),
+      );
+      upgraded = await createTestDatabase(parseTestDatabaseUrl(process.env), {
+        beforeMigrate: async (connection) => {
+          await migrate(connection.db, { migrationsFolder: folder });
+          await seedTwoTenants(connection.db);
+          const prior = await connection.pool.query<{ count: number }>(
+            'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
+          );
+          expect(prior.rows).toEqual([{ count: 1 }]);
+          const absent = await connection.pool.query<{ name: string | null }>(
+            "SELECT to_regclass('public.project_notes')::text AS name",
+          );
+          expect(absent.rows).toEqual([{ name: null }]);
+          for (const table of legacyTables) {
+            originalRows[table] = (
+              await connection.pool.query<Record<string, unknown>>(
+                `SELECT * FROM "${table}" ORDER BY id`,
+              )
+            ).rows;
+          }
+        },
+      });
+      for (const table of legacyTables) {
+        expect(
+          (
+            await upgraded.admin.pool.query<Record<string, unknown>>(
+              `SELECT * FROM "${table}" ORDER BY id`,
+            )
+          ).rows,
+        ).toEqual(originalRows[table]);
+      }
+      expect(await schemaSignature(upgraded)).toEqual(await schemaSignature(database));
+      const journalRows = await upgraded.admin.pool.query<{ count: number }>(
+        'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
+      );
+      expect(journalRows.rows).toEqual([{ count: 2 }]);
+    } finally {
+      await upgraded?.close();
+      // Remove only the known files in this test's uniquely created directory.
+      await unlink(join(folder, '0000_tenancy_foundation.sql')).catch(() => undefined);
+      await unlink(join(folder, 'meta', '_journal.json')).catch(() => undefined);
+      await rmdir(join(folder, 'meta'));
+      await rmdir(folder);
     }
   });
 

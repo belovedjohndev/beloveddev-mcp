@@ -1,4 +1,8 @@
 import {
+  evidenceTypes,
+  blockerSeverities,
+  blockerStatuses,
+  noteCategories,
   clientStatuses,
   membershipRoles,
   projectStatuses,
@@ -27,6 +31,10 @@ export const recordStatus = pgEnum('record_status', recordStatuses);
 export const membershipRole = pgEnum('membership_role', membershipRoles);
 export const clientStatus = pgEnum('client_status', clientStatuses);
 export const projectStatus = pgEnum('project_status', projectStatuses);
+export const evidenceType = pgEnum('evidence_type', evidenceTypes);
+export const blockerSeverity = pgEnum('blocker_severity', blockerSeverities);
+export const blockerStatus = pgEnum('blocker_status', blockerStatuses);
+export const noteCategory = pgEnum('note_category', noteCategories);
 
 const timestamps = () => ({
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -187,6 +195,7 @@ export const projects = pgTable(
     ...timestamps(),
   },
   (table) => [
+    unique('projects_tenant_id_unique').on(table.tenantId, table.id),
     unique('projects_tenant_slug_unique').on(table.tenantId, table.slug),
     foreignKey({
       name: 'projects_tenant_client_fk',
@@ -201,5 +210,143 @@ export const projects = pgTable(
       'projects_dates_ordered',
       sql`${table.completedAt} IS NULL OR ${table.startedAt} IS NULL OR ${table.completedAt} >= ${table.startedAt}`,
     ),
+  ],
+);
+
+// Keep Milestone 1 check definitions stable; new arrays use strict JSONPath
+// so nested arrays, including empty arrays, cannot be implicitly unwrapped.
+const strictStringArray = (column: AnyPgColumn) => sql`
+  CASE WHEN jsonb_typeof(${column}) = 'array'
+    THEN NOT jsonb_path_exists(${column}, 'strict $[*] ? (@.type() != "string")')
+    ELSE false
+  END
+`;
+
+export const projectEvidence = pgTable(
+  'project_evidence',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    projectId: uuid('project_id').notNull(),
+    type: evidenceType('type').notNull(),
+    title: text('title').notNull(),
+    summary: text('summary').notNull(),
+    details: text('details').notNull(),
+    skills: jsonb('skills').$type<readonly string[]>().notNull().default([]),
+    capabilities: jsonb('capabilities').$type<readonly string[]>().notNull().default([]),
+    businessOutcomes: jsonb('business_outcomes').$type<readonly string[]>().notNull().default([]),
+    ...timestamps(),
+  },
+  (table) => [
+    foreignKey({
+      name: 'project_evidence_tenant_project_fk',
+      columns: [table.tenantId, table.projectId],
+      foreignColumns: [projects.tenantId, projects.id],
+    }).onDelete('restrict'),
+    index('project_evidence_tenant_project_created_idx').on(
+      table.tenantId,
+      table.projectId,
+      table.createdAt.desc(),
+      table.id.desc(),
+    ),
+    check('project_evidence_title_nonblank', sql`${table.title} ~ '[^[:space:]]'`),
+    check('project_evidence_summary_nonblank', sql`${table.summary} ~ '[^[:space:]]'`),
+    check('project_evidence_details_nonblank', sql`${table.details} ~ '[^[:space:]]'`),
+    check('project_evidence_skills_array', strictStringArray(table.skills)),
+    check('project_evidence_capabilities_array', strictStringArray(table.capabilities)),
+    check('project_evidence_business_outcomes_array', strictStringArray(table.businessOutcomes)),
+  ],
+);
+
+export const projectBlockers = pgTable(
+  'project_blockers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    projectId: uuid('project_id').notNull(),
+    title: text('title').notNull(),
+    description: text('description').notNull(),
+    severity: blockerSeverity('severity').notNull(),
+    status: blockerStatus('status').notNull().default('open'),
+    blockedSince: timestamp('blocked_since', { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    ...timestamps(),
+  },
+  (table) => [
+    foreignKey({
+      name: 'project_blockers_tenant_project_fk',
+      columns: [table.tenantId, table.projectId],
+      foreignColumns: [projects.tenantId, projects.id],
+    }).onDelete('restrict'),
+    index('project_blockers_tenant_status_blocked_idx').on(
+      table.tenantId,
+      table.status,
+      table.blockedSince,
+      table.id,
+    ),
+    index('project_blockers_tenant_project_status_blocked_idx').on(
+      table.tenantId,
+      table.projectId,
+      table.status,
+      table.blockedSince,
+      table.id,
+    ),
+    check('project_blockers_title_nonblank', sql`${table.title} ~ '[^[:space:]]'`),
+    check('project_blockers_description_nonblank', sql`${table.description} ~ '[^[:space:]]'`),
+    check(
+      'project_blockers_resolution_consistent',
+      sql`
+      (${table.status} = 'open' AND ${table.resolvedAt} IS NULL)
+      OR (${table.status} = 'resolved' AND ${table.resolvedAt} IS NOT NULL)
+    `,
+    ),
+    check('project_blockers_dates_ordered', sql`${table.resolvedAt} >= ${table.blockedSince}`),
+  ],
+);
+
+export const projectNotes = pgTable(
+  'project_notes',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    projectId: uuid('project_id').notNull(),
+    authorUserId: uuid('author_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    category: noteCategory('category').notNull(),
+    content: text('content').notNull(),
+    idempotencyKey: text('idempotency_key').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    foreignKey({
+      name: 'project_notes_tenant_project_fk',
+      columns: [table.tenantId, table.projectId],
+      foreignColumns: [projects.tenantId, projects.id],
+    }).onDelete('restrict'),
+    foreignKey({
+      name: 'project_notes_tenant_author_fk',
+      columns: [table.tenantId, table.authorUserId],
+      foreignColumns: [tenantMemberships.tenantId, tenantMemberships.userId],
+    }).onDelete('restrict'),
+    unique('project_notes_tenant_author_idempotency_unique').on(
+      table.tenantId,
+      table.authorUserId,
+      table.idempotencyKey,
+    ),
+    index('project_notes_tenant_project_created_idx').on(
+      table.tenantId,
+      table.projectId,
+      table.createdAt.desc(),
+      table.id.desc(),
+    ),
+    check('project_notes_content_nonblank', sql`${table.content} ~ '[^[:space:]]'`),
+    check('project_notes_idempotency_key_nonblank', sql`${table.idempotencyKey} ~ '[^[:space:]]'`),
   ],
 );

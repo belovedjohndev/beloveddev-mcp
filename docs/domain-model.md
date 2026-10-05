@@ -1,9 +1,10 @@
 # BelovedDev MCP V1 — Domain Model
 
-## Milestone 1 concrete storage decisions
+## Milestones 1 and 2 concrete storage decisions
 
-Only tenants, users, tenant_memberships, developer_profiles, clients, and projects
-are implemented. All later entities below remain proposed.
+Implemented tables: tenants, users, tenant_memberships, developer_profiles,
+clients, projects, project_evidence, project_blockers, and project_notes.
+Opportunity and audit entities below remain proposed.
 
 Tenant, user, and membership statuses are active/inactive; clients are
 active/archived. Email uniqueness is global and case-insensitive, without any
@@ -16,6 +17,30 @@ arrays of strings checked by PostgreSQL.
 See [database conventions](database.md) for nullability, indexes, migration
 workflow, and the distinction between scoped repository access and future
 authenticated tenant context.
+
+Milestone 2 stores all specified knowledge fields. Evidence title, summary, and
+details; blocker title and description; and note content and idempotency key must
+contain a non-whitespace character. Evidence collections are JSONB string arrays
+defaulting to empty arrays. Evidence type, blocker severity/status, and note
+category are PostgreSQL enums matching the values below.
+
+Every knowledge row has a non-null tenant and project. Composite foreign keys
+reference `projects(tenant_id, id)`, preventing cross-tenant inserts, updates, and
+parent ownership changes. Deletion is restricted.
+
+An open blocker has no resolution timestamp; a resolved blocker requires one.
+Resolution cannot precede `blocked_since`. Blockers default to open with
+`blocked_since = now()`; severity must be supplied. No resolution use case exists.
+
+Notes reference both the global author user and
+`tenant_memberships(tenant_id, user_id)`. Membership existence is a persistent
+database invariant. Membership status and permissions are future application
+checks: making a membership inactive preserves historical notes, and does not
+make direct SQL an authorized mutation. Referenced memberships cannot be deleted.
+The unique key is exactly `(tenant_id, author_user_id, idempotency_key)`, across
+projects. Duplicate-result handling and transactional auditing remain Milestone 7.
+Milestone 2 exposes read-only knowledge repositories, with no note mutation API
+or database trigger claiming append-only enforcement.
 
 ## 1. Domain Boundary
 

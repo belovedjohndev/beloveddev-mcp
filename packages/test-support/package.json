@@ -11,6 +11,10 @@
     "./tenant-fixtures": {
       "types": "./dist/tenant-fixtures.d.ts",
       "import": "./dist/tenant-fixtures.js"
+    },
+    "./project-knowledge-fixtures": {
+      "types": "./dist/project-knowledge-fixtures.d.ts",
+      "import": "./dist/project-knowledge-fixtures.js"
     }
   },
   "dependencies": {
