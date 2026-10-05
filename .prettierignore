@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+package-lock.json
+# Existing specifications are formatted when intentionally edited.
+AGENTS.md
+structure.md
+docs/product-spec.md
+docs/domain-model.md
+docs/mcp-tool-contracts.md

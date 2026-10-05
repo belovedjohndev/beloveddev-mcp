@@ -1,0 +1,20 @@
+{
+  "name": "@beloveddev/infrastructure",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./environment": {
+      "types": "./dist/environment.d.ts",
+      "import": "./dist/environment.js"
+    },
+    "./logger": {
+      "types": "./dist/logger.d.ts",
+      "import": "./dist/logger.js"
+    }
+  },
+  "dependencies": {
+    "pino": "10.4.0",
+    "zod": "^4.1.13"
+  }
+}

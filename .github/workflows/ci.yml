@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run verify
+      - name: Prepare local database configuration
+        run: cp .env.example .env
+      - name: Validate Compose and start PostgreSQL
+        run: |
+          docker compose config --quiet
+          npm run db:up
+      - name: Verify PostgreSQL accepts a query
+        run: >-
+          docker compose exec -T postgres sh -eu -c
+          'export PGPASSWORD="$POSTGRES_PASSWORD";
+          psql -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+          -v ON_ERROR_STOP=1 -c "SELECT 1;"'
+      - name: Stop PostgreSQL
+        if: always()
+        run: docker compose --env-file .env.example down --volumes
