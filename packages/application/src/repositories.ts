@@ -9,9 +9,12 @@ import type {
   Project,
   ProjectStatus,
 } from '@beloveddev/domain/entities';
+import type { BlockerPosition, ProjectPosition } from './pagination.js';
 
 export interface MembershipRepository {
   getByUser(input: { tenantId: string; userId: string }): Promise<Membership | null>;
+  /** Requires an active membership, user, and tenant. */
+  getActiveByUser(input: { tenantId: string; userId: string }): Promise<Membership | null>;
 }
 
 export interface DeveloperProfileRepository {
@@ -34,6 +37,7 @@ export interface ProjectListQuery {
 export interface ProjectRepository {
   getById(input: { tenantId: string; projectId: string }): Promise<Project | null>;
   list(input: ProjectListQuery): Promise<readonly Project[]>;
+  listPage(input: ProjectPageQuery): Promise<ProjectPage>;
   /** Persistence primitive; callers must establish authorization before invoking it. */
   create(input: NewProject): Promise<Project>;
 }
@@ -61,9 +65,30 @@ export interface OpenBlockersQuery {
 export interface BlockerRepository {
   /** Open only; oldest blockedSince first, then ascending ID. */
   listOpen(input: OpenBlockersQuery): Promise<readonly ProjectBlocker[]>;
+  listOpenPage(input: BlockerPageQuery): Promise<BlockerPage>;
 }
 
 export interface NoteRepository {
   /** Newest createdAt first, then descending ID. */
   listRecentByProject(input: ProjectKnowledgeQuery): Promise<readonly ProjectNote[]>;
+}
+
+export interface ProjectPageQuery extends ProjectListQuery {
+  readonly clientId?: string;
+  readonly query?: string;
+  readonly after?: ProjectPosition;
+}
+export interface ProjectPage {
+  readonly items: readonly {
+    readonly project: Project;
+    readonly client: Pick<Client, 'id' | 'name'> | null;
+  }[];
+  readonly nextPosition: ProjectPosition | null;
+}
+export interface BlockerPageQuery extends OpenBlockersQuery {
+  readonly after?: BlockerPosition;
+}
+export interface BlockerPage {
+  readonly items: readonly { readonly blocker: ProjectBlocker; readonly projectName: string }[];
+  readonly nextPosition: BlockerPosition | null;
 }

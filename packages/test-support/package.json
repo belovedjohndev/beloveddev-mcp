@@ -15,10 +15,16 @@
     "./project-knowledge-fixtures": {
       "types": "./dist/project-knowledge-fixtures.d.ts",
       "import": "./dist/project-knowledge-fixtures.js"
+    },
+    "./read-fixtures": {
+      "types": "./dist/read-fixtures.d.ts",
+      "import": "./dist/read-fixtures.js"
     }
   },
   "dependencies": {
     "@beloveddev/database": "0.0.0",
-    "drizzle-orm": "0.45.3"
+    "drizzle-orm": "0.45.3",
+    "@beloveddev/domain": "0.0.0",
+    "@beloveddev/application": "0.0.0"
   }
 }

@@ -48,3 +48,48 @@ export function parseTestDatabaseUrl(input: Readonly<Record<string, string | und
   if (!result.success) throw new EnvironmentValidationError(['TEST_DATABASE_URL']);
   return result.data;
 }
+
+const mcpEnvironmentSchema = environmentSchema
+  .extend({
+    MCP_AUTH_MODE: z.literal('local'),
+    MCP_LOCAL_TENANT_ID: z.uuid().optional(),
+    MCP_LOCAL_USER_ID: z.uuid().optional(),
+    MCP_CURSOR_SECRET: z.string().min(32).max(1024),
+  })
+  .superRefine((value, context) => {
+    if (value.NODE_ENV === 'production') {
+      context.addIssue({
+        code: 'custom',
+        path: ['MCP_AUTH_MODE'],
+        message: 'Local identity is unavailable in production.',
+      });
+    }
+    if ((value.MCP_LOCAL_TENANT_ID === undefined) !== (value.MCP_LOCAL_USER_ID === undefined)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['MCP_LOCAL_TENANT_ID'],
+        message: 'Configure both identity fields or neither.',
+      });
+      context.addIssue({
+        code: 'custom',
+        path: ['MCP_LOCAL_USER_ID'],
+        message: 'Configure both identity fields or neither.',
+      });
+    }
+  });
+
+export function parseMcpEnvironment(input: Readonly<Record<string, string | undefined>>) {
+  const result = mcpEnvironmentSchema.safeParse(input);
+  if (!result.success) {
+    throw new EnvironmentValidationError(
+      [
+        ...new Set(
+          result.error.issues
+            .map((issue) => issue.path[0])
+            .filter((field): field is string => typeof field === 'string'),
+        ),
+      ].sort(),
+    );
+  }
+  return Object.freeze(result.data);
+}

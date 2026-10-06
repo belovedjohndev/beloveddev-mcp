@@ -33,6 +33,8 @@ describe('structured logging', () => {
     logger.info(
       {
         password: 'private-password',
+        MCP_CURSOR_SECRET: 'private-cursor-signing-secret',
+        signing: { cursorSecret: 'private-nested-cursor-secret' },
         DATABASE_URL: 'postgresql://private-credentials@localhost/db',
         credentials: { token: 'private-token' },
         req: { headers: { authorization: 'Bearer private-auth', cookie: 'private-cookie' } },
@@ -47,6 +49,8 @@ describe('structured logging', () => {
     const record: unknown = JSON.parse(output);
     expect(record).toMatchObject({
       password: '[REDACTED]',
+      MCP_CURSOR_SECRET: '[REDACTED]',
+      signing: { cursorSecret: '[REDACTED]' },
       DATABASE_URL: '[REDACTED]',
       credentials: { token: '[REDACTED]' },
       req: { headers: { authorization: '[REDACTED]', cookie: '[REDACTED]' } },

@@ -60,13 +60,14 @@ export async function createTestDatabase(
     await admin.pool.query(
       `GRANT SELECT ON tenant_memberships, developer_profiles, clients, projects, project_evidence, project_blockers, project_notes TO "${roleName}"`,
     );
+    await admin.pool.query(`GRANT SELECT (id, status) ON tenants, users TO "${roleName}"`);
     await admin.pool.query(`GRANT INSERT ON projects TO "${roleName}"`);
     url.username = roleName;
     url.password = password;
     url.searchParams.delete('user');
     url.searchParams.delete('password');
     runtime = openDatabase(url.href, { onIdleError });
-    return { admin, runtime, close };
+    return { admin, runtime, runtimeUrl: url.href, close };
   } catch (error: unknown) {
     await close();
     throw error;

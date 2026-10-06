@@ -11,9 +11,45 @@
     "./repository-error": {
       "types": "./dist/repository-error.d.ts",
       "import": "./dist/repository-error.js"
+    },
+    "./application-error": {
+      "types": "./dist/application-error.d.ts",
+      "import": "./dist/application-error.js"
+    },
+    "./request-context": {
+      "types": "./dist/request-context.d.ts",
+      "import": "./dist/request-context.js"
+    },
+    "./read-inputs": {
+      "types": "./dist/read-inputs.d.ts",
+      "import": "./dist/read-inputs.js"
+    },
+    "./pagination": {
+      "types": "./dist/pagination.d.ts",
+      "import": "./dist/pagination.js"
+    },
+    "./use-cases/get-profile": {
+      "types": "./dist/use-cases/get-profile.d.ts",
+      "import": "./dist/use-cases/get-profile.js"
+    },
+    "./use-cases/list-projects": {
+      "types": "./dist/use-cases/list-projects.d.ts",
+      "import": "./dist/use-cases/list-projects.js"
+    },
+    "./use-cases/get-project": {
+      "types": "./dist/use-cases/get-project.d.ts",
+      "import": "./dist/use-cases/get-project.js"
+    },
+    "./use-cases/get-blockers": {
+      "types": "./dist/use-cases/get-blockers.d.ts",
+      "import": "./dist/use-cases/get-blockers.js"
     }
   },
   "dependencies": {
-    "@beloveddev/domain": "0.0.0"
+    "@beloveddev/domain": "0.0.0",
+    "zod": "^4.2.0"
+  },
+  "devDependencies": {
+    "@beloveddev/test-support": "0.0.0"
   }
 }

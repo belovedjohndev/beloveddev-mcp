@@ -818,3 +818,24 @@ evaluation version where applicable
 ```
 
 Prefer additive evolution where practical.
+
+## Milestone 3 SDK and application error boundary
+
+The four implemented read tools use the official MCP SDK v2
+`McpServer.registerTool()` API with strict Zod input and success-output schemas.
+
+Invalid protocol requests, unknown tools, and invalid tool argument schemas are
+SDK/protocol-layer failures. The SDK rejects them before the registered callback:
+no BelovedDev use case, trusted-context lookup, or resource repository runs.
+These failures follow SDK response semantics; they do not require a BelovedDev
+application error envelope, application request ID, or invocation log.
+
+After SDK validation, the shared callback generates an application request ID,
+resolves trusted context, executes the use case, validates its success output,
+and records a structured invocation log. Unauthenticated, forbidden, not-found,
+application validation (including cursor integrity), and infrastructure failures
+produce a safe application error as JSON text with `isError: true`.
+Error results omit `structuredContent` because the advertised output schema
+describes success. Success returns matching JSON text and `structuredContent`
+with `meta.requestId`. Neither input schemas nor permissions are relaxed to
+route SDK failures through application code.

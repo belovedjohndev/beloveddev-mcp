@@ -39,6 +39,14 @@
     "./postgres/note-repository": {
       "types": "./dist/postgres/note-repository.d.ts",
       "import": "./dist/postgres/note-repository.js"
+    },
+    "./local-request-context": {
+      "types": "./dist/local-request-context.d.ts",
+      "import": "./dist/local-request-context.js"
+    },
+    "./signed-cursor": {
+      "types": "./dist/signed-cursor.d.ts",
+      "import": "./dist/signed-cursor.js"
     }
   },
   "dependencies": {
@@ -46,7 +54,8 @@
     "@beloveddev/database": "0.0.0",
     "drizzle-orm": "0.45.3",
     "pino": "10.4.0",
-    "zod": "^4.1.13"
+    "zod": "^4.1.13",
+    "@beloveddev/domain": "0.0.0"
   },
   "devDependencies": {
     "@beloveddev/test-support": "0.0.0"

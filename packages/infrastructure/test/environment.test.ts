@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EnvironmentValidationError,
   parseEnvironment,
+  parseMcpEnvironment,
   parseTestDatabaseUrl,
 } from '../src/environment.js';
 
@@ -83,5 +84,50 @@ describe('integration database configuration', () => {
     expect(() => parseTestDatabaseUrl({ TEST_DATABASE_URL: 'invalid-private-secret' })).toThrow(
       'Invalid environment variables: TEST_DATABASE_URL',
     );
+  });
+});
+
+describe('MCP environment validation', () => {
+  const valid = {
+    DATABASE_URL: databaseUrl,
+    MCP_AUTH_MODE: 'local',
+    MCP_CURSOR_SECRET: 'private-cursor-key-at-least-32-characters',
+  };
+  it.each([32, 1024])('accepts the schema secret length boundary %s', (length) => {
+    const result = parseMcpEnvironment({ ...valid, MCP_CURSOR_SECRET: 'x'.repeat(length) });
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(result.MCP_LOCAL_TENANT_ID).toBeUndefined();
+    expect(result.MCP_LOCAL_USER_ID).toBeUndefined();
+  });
+  it.each([
+    { MCP_AUTH_MODE: undefined },
+    { MCP_AUTH_MODE: '' },
+    { MCP_AUTH_MODE: 'remote' },
+    { MCP_CURSOR_SECRET: undefined },
+    { MCP_CURSOR_SECRET: '' },
+    { MCP_CURSOR_SECRET: 'x'.repeat(31) },
+    { MCP_CURSOR_SECRET: 'x'.repeat(1025) },
+    { MCP_LOCAL_TENANT_ID: 'invalid', MCP_LOCAL_USER_ID: 'invalid' },
+    { MCP_LOCAL_TENANT_ID: '00000000-0000-4000-8000-000000000001' },
+    { MCP_LOCAL_USER_ID: '00000000-0000-4000-8000-000000000002' },
+    { NODE_ENV: 'production' },
+  ])('rejects unsupported or incomplete MCP settings without retaining values', (overrides) => {
+    try {
+      parseMcpEnvironment({ ...valid, ...overrides });
+      expect.fail('Expected invalid configuration');
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(EnvironmentValidationError);
+      expect(JSON.stringify(error)).not.toContain('private-');
+      if (!(error instanceof EnvironmentValidationError)) throw error;
+      expect(error.cause).toBeUndefined();
+      expect(error.message).not.toContain(valid.MCP_CURSOR_SECRET);
+    }
+  });
+  it('accepts both operator-supplied identity fields together', () => {
+    const identity = {
+      MCP_LOCAL_TENANT_ID: '00000000-0000-4000-8000-000000000001',
+      MCP_LOCAL_USER_ID: '00000000-0000-4000-8000-000000000002',
+    };
+    expect(parseMcpEnvironment({ ...valid, ...identity })).toMatchObject(identity);
   });
 });

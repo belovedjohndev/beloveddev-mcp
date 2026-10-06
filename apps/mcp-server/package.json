@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@beloveddev/infrastructure": "0.0.0"
+    "@beloveddev/infrastructure": "0.0.0",
+    "@beloveddev/application": "0.0.0",
+    "@beloveddev/database": "0.0.0",
+    "@beloveddev/mcp": "0.0.0",
+    "@modelcontextprotocol/server": "2.3.1"
   }
 }

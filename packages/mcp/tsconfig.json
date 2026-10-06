@@ -5,14 +5,10 @@
     "declaration": true,
     "rootDir": "src",
     "outDir": "dist",
-    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
-    "skipLibCheck": true
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
   "references": [
-    {
-      "path": "../database"
-    },
     {
       "path": "../application"
     },

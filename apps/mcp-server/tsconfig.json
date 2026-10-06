@@ -5,11 +5,21 @@
     "declaration": true,
     "rootDir": "src",
     "outDir": "dist",
-    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo"
+    "tsBuildInfoFile": "dist/tsconfig.tsbuildinfo",
+    "skipLibCheck": true
   },
   "references": [
     {
       "path": "../../packages/infrastructure"
+    },
+    {
+      "path": "../../packages/application"
+    },
+    {
+      "path": "../../packages/database"
+    },
+    {
+      "path": "../../packages/mcp"
     }
   ],
   "include": ["src/**/*.ts"],
