@@ -22,6 +22,7 @@ import {
   seedTwoTenants,
   type TenantFixtures,
 } from '@beloveddev/test-support/tenant-fixtures';
+import { seedProjectKnowledge } from '@beloveddev/test-support/project-knowledge-fixtures';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -107,7 +108,7 @@ describe('real PostgreSQL migration and constraints', () => {
     const journal = await database.admin.pool.query<{ count: number }>(
       'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
     );
-    expect(journal.rows).toEqual([{ count: 2 }]);
+    expect(journal.rows).toEqual([{ count: 3 }]);
   });
 
   it.each(tables.map((table) => [getTableConfig(table).name, table] as const))(
@@ -223,11 +224,63 @@ describe('real PostgreSQL migration and constraints', () => {
       const journalRows = await upgraded.admin.pool.query<{ count: number }>(
         'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
       );
-      expect(journalRows.rows).toEqual([{ count: 2 }]);
+      expect(journalRows.rows).toEqual([{ count: 3 }]);
     } finally {
       await upgraded?.close();
       // Remove only the known files in this test's uniquely created directory.
       await unlink(join(folder, '0000_tenancy_foundation.sql')).catch(() => undefined);
+      await unlink(join(folder, 'meta', '_journal.json')).catch(() => undefined);
+      await rmdir(join(folder, 'meta'));
+      await rmdir(folder);
+    }
+  });
+
+  it('upgrades populated Milestone 3 evidence and builds its stored search vector and GIN index', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'beloveddev-m3-upgrade-'));
+    let upgraded: TestDatabase | undefined;
+    let evidenceId = '';
+    try {
+      await mkdir(join(folder, 'meta'));
+      const journal = JSON.parse(
+        await readFile(new URL('../migrations/meta/_journal.json', import.meta.url), 'utf8'),
+      ) as { entries: unknown[] };
+      journal.entries = journal.entries.slice(0, 2);
+      await writeFile(join(folder, 'meta', '_journal.json'), JSON.stringify(journal));
+      for (const migration of ['0000_tenancy_foundation.sql', '0001_project_knowledge.sql']) {
+        await copyFile(
+          new URL(`../migrations/${migration}`, import.meta.url),
+          join(folder, migration),
+        );
+      }
+      upgraded = await createTestDatabase(parseTestDatabaseUrl(process.env), {
+        beforeMigrate: async (connection) => {
+          await migrate(connection.db, { migrationsFolder: folder });
+          const seededTenants = await seedTwoTenants(connection.db);
+          const knowledge = await seedProjectKnowledge(connection.db, seededTenants);
+          evidenceId = knowledge.a.evidenceId;
+          const absent = await connection.pool.query<{ name: string | null }>(
+            "SELECT column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name='project_evidence' AND column_name='search_vector'",
+          );
+          expect(absent.rows).toEqual([]);
+        },
+      });
+      const evidence = await upgraded.admin.pool.query<{ id: string; searchable: boolean }>(
+        "SELECT id, search_vector @@ websearch_to_tsquery('english', 'PostgreSQL') AS searchable FROM project_evidence WHERE id=$1",
+        [evidenceId],
+      );
+      expect(evidence.rows).toEqual([{ id: evidenceId, searchable: true }]);
+      const index = await upgraded.admin.pool.query<{ indexdef: string }>(
+        "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='project_evidence_search_vector_idx'",
+      );
+      expect(index.rows[0]?.indexdef).toContain('USING gin (search_vector)');
+      const journalRows = await upgraded.admin.pool.query<{ count: number }>(
+        'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
+      );
+      expect(journalRows.rows).toEqual([{ count: 3 }]);
+    } finally {
+      await upgraded?.close();
+      for (const migration of ['0000_tenancy_foundation.sql', '0001_project_knowledge.sql'])
+        await unlink(join(folder, migration)).catch(() => undefined);
       await unlink(join(folder, 'meta', '_journal.json')).catch(() => undefined);
       await rmdir(join(folder, 'meta'));
       await rmdir(folder);

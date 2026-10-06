@@ -16,7 +16,7 @@ export class GetProject {
     private readonly repositories: {
       projects: Pick<ProjectRepository, 'getById'>;
       clients: ClientRepository;
-      evidence: EvidenceRepository;
+      evidence: Pick<EvidenceRepository, 'listByProject'>;
       blockers: Pick<BlockerRepository, 'listOpen'>;
       notes: NoteRepository;
     },

@@ -12,6 +12,7 @@ import {
 import { sql } from 'drizzle-orm';
 import {
   check,
+  customType,
   foreignKey,
   index,
   jsonb,
@@ -26,6 +27,10 @@ import {
   uuid,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
+
+const tsvector = customType<{ data: string }>({
+  dataType: () => 'tsvector',
+});
 
 export const recordStatus = pgEnum('record_status', recordStatuses);
 export const membershipRole = pgEnum('membership_role', membershipRoles);
@@ -237,6 +242,16 @@ export const projectEvidence = pgTable(
     skills: jsonb('skills').$type<readonly string[]>().notNull().default([]),
     capabilities: jsonb('capabilities').$type<readonly string[]>().notNull().default([]),
     businessOutcomes: jsonb('business_outcomes').$type<readonly string[]>().notNull().default([]),
+    searchVector: tsvector('search_vector').notNull().generatedAlwaysAs(sql`
+        setweight(to_tsvector('english'::regconfig, coalesce("title", '')), 'A') ||
+        setweight(to_tsvector('english'::regconfig, coalesce("summary", '')), 'B') ||
+        setweight(to_tsvector('english'::regconfig, coalesce("details", '')), 'C') ||
+        setweight(to_tsvector('english'::regconfig,
+          coalesce("skills"::text, '') || ' ' ||
+          coalesce("capabilities"::text, '') || ' ' ||
+          coalesce("business_outcomes"::text, '')
+        ), 'D')
+      `),
     ...timestamps(),
   },
   (table) => [
@@ -251,6 +266,7 @@ export const projectEvidence = pgTable(
       table.createdAt.desc(),
       table.id.desc(),
     ),
+    index('project_evidence_search_vector_idx').using('gin', table.searchVector),
     check('project_evidence_title_nonblank', sql`${table.title} ~ '[^[:space:]]'`),
     check('project_evidence_summary_nonblank', sql`${table.summary} ~ '[^[:space:]]'`),
     check('project_evidence_details_nonblank', sql`${table.details} ~ '[^[:space:]]'`),

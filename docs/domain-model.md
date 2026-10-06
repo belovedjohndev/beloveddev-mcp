@@ -612,7 +612,10 @@ capabilities
 businessOutcomes
 ```
 
-The exact generated/search-vector implementation should be chosen during the database milestone after inspecting PostgreSQL and Drizzle ergonomics.
+Milestone 4-A implements this as a stored generated English `tsvector`: title is
+weighted A, summary B, details C, and skills/capabilities/business outcomes D. A
+GIN index supports matching. The vector is derived search state rather than a new
+domain field exposed by application results.
 
 ## 17. Domain Rules Summary
 

@@ -1,4 +1,4 @@
-import { blockerSeverities, projectStatuses } from '@beloveddev/domain/entities';
+import { blockerSeverities, evidenceTypes, projectStatuses } from '@beloveddev/domain/entities';
 import { z } from 'zod';
 import { ApplicationError } from './application-error.js';
 
@@ -16,6 +16,14 @@ export const getProjectInput = z.strictObject({ projectId: z.uuid() });
 export const getBlockersInput = z.strictObject({
   projectId: z.uuid().optional(),
   severity: z.enum(blockerSeverities).optional(),
+  limit,
+  cursor,
+});
+export const searchProjectEvidenceInput = z.strictObject({
+  query: z.string().trim().min(1).max(1000),
+  projectIds: z.array(z.uuid()).min(1).max(100).optional(),
+  evidenceTypes: z.array(z.enum(evidenceTypes)).min(1).max(evidenceTypes.length).optional(),
+  skills: z.array(z.string().trim().min(1).max(100)).min(1).max(50).optional(),
   limit,
   cursor,
 });

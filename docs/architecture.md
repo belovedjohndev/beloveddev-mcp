@@ -501,6 +501,23 @@ PostgreSQL FTS is preferred initially because it is:
 
 No vector database is required for V1.
 
+### Milestone 4-A implementation boundary
+
+`SearchProjectEvidence` is implemented as an application use case over an
+explicit `EvidenceRepository.search` port. It authorizes `projects:read` before
+decoding cursors or accessing the repository. Trusted request context supplies
+tenant scope; search input has no tenant selector.
+
+The PostgreSQL adapter uses a stored weighted English `tsvector`, a GIN index,
+`websearch_to_tsquery`, and deterministic `ts_rank_cd DESC, evidence_id ASC`
+ordering. Project IDs, evidence types, and exact case-folded skill memberships
+are SQL predicates. The signed cursor is bound to the tenant, normalized search
+fingerprint, canonical PostgreSQL rank, and evidence ID.
+
+Milestone 4-A stops at the repository and application boundary. MCP registration,
+transport schemas, invocation logging for this future tool, and composition-root
+wiring remain Milestone 4-B.
+
 ## 15. Opportunity Evaluation Architecture
 
 Opportunity evaluation is an application/domain operation.

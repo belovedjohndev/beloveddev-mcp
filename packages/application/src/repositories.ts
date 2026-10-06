@@ -8,8 +8,9 @@ import type {
   Membership,
   Project,
   ProjectStatus,
+  EvidenceType,
 } from '@beloveddev/domain/entities';
-import type { BlockerPosition, ProjectPosition } from './pagination.js';
+import type { BlockerPosition, EvidenceSearchPosition, ProjectPosition } from './pagination.js';
 
 export interface MembershipRepository {
   getByUser(input: { tenantId: string; userId: string }): Promise<Membership | null>;
@@ -52,6 +53,35 @@ export interface ProjectKnowledgeQuery {
 export interface EvidenceRepository {
   /** Newest createdAt first, then descending ID; includes summary and details. */
   listByProject(input: ProjectKnowledgeQuery): Promise<readonly ProjectEvidence[]>;
+  search(input: EvidenceSearchQuery): Promise<EvidenceSearchPage>;
+}
+
+export interface EvidenceSearchQuery {
+  readonly tenantId: string;
+  readonly query: string;
+  readonly projectIds?: readonly string[];
+  readonly evidenceTypes?: readonly EvidenceType[];
+  /** Case-folded exact memberships; any requested skill may match. */
+  readonly skills?: readonly string[];
+  readonly limit: number;
+  readonly after?: EvidenceSearchPosition;
+}
+export interface EvidenceSearchResult {
+  readonly evidenceId: string;
+  readonly projectId: string;
+  readonly projectName: string;
+  readonly type: EvidenceType;
+  readonly title: string;
+  readonly summary: string;
+  readonly skills: readonly string[];
+  readonly capabilities: readonly string[];
+  readonly businessOutcomes: readonly string[];
+  /** PostgreSQL ts_rank_cd value represented as a JavaScript number. */
+  readonly relevanceScore: number;
+}
+export interface EvidenceSearchPage {
+  readonly items: readonly EvidenceSearchResult[];
+  readonly nextPosition: EvidenceSearchPosition | null;
 }
 
 export interface OpenBlockersQuery {

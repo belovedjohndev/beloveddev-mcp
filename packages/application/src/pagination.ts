@@ -8,6 +8,11 @@ export interface BlockerPosition {
   /** UTC ISO timestamp with six fractional digits, preserving PostgreSQL precision. */
   readonly blockedSince: string;
 }
+export interface EvidenceSearchPosition {
+  readonly id: string;
+  /** Canonical PostgreSQL real output, used for an exact rank keyset comparison. */
+  readonly relevanceScore: string;
+}
 
 export type PageCursor =
   | {
@@ -26,6 +31,13 @@ export type PageCursor =
       readonly projectId: string | null;
       readonly severity: BlockerSeverity | null;
       readonly position: BlockerPosition;
+    }
+  | {
+      readonly version: 1;
+      readonly kind: 'evidence_search';
+      readonly tenantId: string;
+      readonly queryFingerprint: string;
+      readonly position: EvidenceSearchPosition;
     };
 
 /** Encoding, integrity checks, and structural validation belong to the adapter. */

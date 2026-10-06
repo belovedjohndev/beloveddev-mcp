@@ -179,8 +179,9 @@ filters, ordering, bounds, safe failures, populated Milestone 1 upgrades, and
 reproducible full-chain migrations on fresh databases. See
 [database conventions](database.md) for the concrete decisions.
 
-No MCP transport/tools, opportunity model, full-text search, authentication,
-or note mutation/audit use case is implemented. Milestone 3 has not started.
+Milestone 3 is complete: the four initial read-only tools run over stdio through
+trusted local context, permission checks, application use cases, scoped
+repositories, signed cursor pagination, and safe errors/logging.
 
 ---
 
@@ -230,6 +231,24 @@ No tool handler should contain SQL or domain rules.
 
 ## 6. Milestone 4 — Portfolio Evidence Search
 
+Milestone 4 is split at the application/interface boundary.
+
+### Milestone 4-A — PostgreSQL and application search
+
+Implemented in this slice:
+
+- stored weighted English full-text vector and GIN index
+- `websearch_to_tsquery` user-query parsing
+- deterministic `ts_rank_cd DESC, evidence_id ASC` ranking
+- tenant, project, evidence-type, and exact normalized skill predicates
+- signed rank/ID keyset cursors bound to a normalized search fingerprint
+- `SearchProjectEvidence` with `projects:read` authorization
+- application and real PostgreSQL tests
+
+The MCP tool is intentionally absent.
+
+### Milestone 4-B — MCP exposure
+
 ### Goal
 
 Allow agents to retrieve relevant prior work for job/proposal decisions.
@@ -246,15 +265,10 @@ Use PostgreSQL full-text search plus structured filters.
 
 Do not use embeddings.
 
-### Deliverables
+### Remaining deliverables
 
-- full-text search representation/index
-- ranking strategy
-- tenant scope
-- filters
-- cursor pagination
-- integration tests
 - MCP contract tests
+- MCP schema, registration, invocation logging, and composition-root wiring
 
 ### Representative Initial Portfolio Data
 

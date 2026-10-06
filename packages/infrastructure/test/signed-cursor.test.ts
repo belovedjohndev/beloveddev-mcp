@@ -23,6 +23,13 @@ const blockers: PageCursor = {
   severity: 'high',
   position: { id: fixtureId(2), blockedSince: '2026-02-01T09:00:00.123456Z' },
 };
+const evidenceSearch: PageCursor = {
+  version: 1,
+  kind: 'evidence_search',
+  tenantId: fixtureId(1),
+  queryFingerprint: 'a'.repeat(64),
+  position: { id: fixtureId(2), relevanceScore: '0.123456' },
+};
 function sign(value: unknown) {
   const payload = Buffer.from(JSON.stringify(value)).toString('base64url');
   return (
@@ -32,12 +39,15 @@ function sign(value: unknown) {
   );
 }
 describe('signed cursor integrity', () => {
-  it.each([projects, blockers])('round trips deterministic versioned $kind positions', (cursor) => {
-    const token = codec.encode(cursor);
-    expect(token).toBe(codec.encode(cursor));
-    expect(codec.decode(token)).toEqual(cursor);
-    expect(token).not.toContain(secret);
-  });
+  it.each([projects, blockers, evidenceSearch])(
+    'round trips deterministic versioned $kind positions',
+    (cursor) => {
+      const token = codec.encode(cursor);
+      expect(token).toBe(codec.encode(cursor));
+      expect(codec.decode(token)).toEqual(cursor);
+      expect(token).not.toContain(secret);
+    },
+  );
   it.each(['', 'bad', 'a.b', 'a'.repeat(4097), 'abc.def.extra'])(
     'rejects malformed tokens',
     (token) => {
@@ -61,6 +71,10 @@ describe('signed cursor integrity', () => {
     { ...projects, position: { id: fixtureId(2), offset: 1 } },
     { ...blockers, position: { id: fixtureId(2), blockedSince: '2026-02-01T09:00:00.123Z' } },
     { ...blockers, position: { id: fixtureId(2), blockedSince: 'invalid' } },
+    { ...evidenceSearch, queryFingerprint: 'invalid' },
+    { ...evidenceSearch, position: { id: 'invalid', relevanceScore: '0.5' } },
+    { ...evidenceSearch, position: { id: fixtureId(2), relevanceScore: 'NaN' } },
+    { ...evidenceSearch, position: { id: fixtureId(2), relevanceScore: '-1' } },
   ])('rejects signed but invalid cursor structures', (value) => {
     expect(() => codec.decode(sign(value))).toThrow('The input is invalid.');
   });

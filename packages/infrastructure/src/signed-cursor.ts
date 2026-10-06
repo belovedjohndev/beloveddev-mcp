@@ -25,6 +25,21 @@ const cursorSchema = z.discriminatedUnion('kind', [
       blockedSince: z.iso.datetime({ precision: 6 }),
     }),
   }),
+  z.strictObject({
+    version: z.literal(1),
+    kind: z.literal('evidence_search'),
+    tenantId: z.uuid(),
+    queryFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+    position: z.strictObject({
+      id: z.uuid(),
+      relevanceScore: z
+        .string()
+        .min(1)
+        .max(32)
+        .regex(/^(?:0|[1-9]\d*)(?:\.\d+)?(?:e[+-]?\d+)?$/)
+        .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0),
+    }),
+  }),
 ]);
 
 export class SignedCursorCodec implements CursorCodec {

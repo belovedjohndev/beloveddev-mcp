@@ -15,6 +15,13 @@
       "when": 1791231320988,
       "tag": "0001_project_knowledge",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791269605946,
+      "tag": "0002_evidence_search",
+      "breakpoints": true
     }
   ]
 }

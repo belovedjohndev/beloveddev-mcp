@@ -43,6 +43,10 @@
     "./use-cases/get-blockers": {
       "types": "./dist/use-cases/get-blockers.d.ts",
       "import": "./dist/use-cases/get-blockers.js"
+    },
+    "./use-cases/search-project-evidence": {
+      "types": "./dist/use-cases/search-project-evidence.d.ts",
+      "import": "./dist/use-cases/search-project-evidence.js"
     }
   },
   "dependencies": {

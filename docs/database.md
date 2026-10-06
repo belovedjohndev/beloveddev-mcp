@@ -118,15 +118,20 @@ Indexes follow the implemented reads:
 | Table            | Index columns and order                                  |
 | ---------------- | -------------------------------------------------------- |
 | project_evidence | tenant_id, project_id, created_at DESC, id DESC          |
+| project_evidence | GIN on stored search_vector                              |
 | project_notes    | tenant_id, project_id, created_at DESC, id DESC          |
 | project_blockers | tenant_id, status, blocked_since ASC, id ASC             |
 | project_blockers | tenant_id, project_id, status, blocked_since ASC, id ASC |
 
 Blocker severity is an optional predicate; no additional speculative index is
 introduced. Descending queries explicitly use NULLS LAST to match their indexes;
-the indexed fields are NOT NULL. UUIDs supply a stable tie-breaker. Evidence keeps
-ordinary text and JSONB fields suitable for later PostgreSQL FTS. No search vector,
-GIN index, normalization policy, or search query is implemented yet.
+the indexed fields are NOT NULL. UUIDs supply a stable tie-breaker.
+
+Milestone 4-A adds a stored generated `tsvector` to project evidence. It uses the
+English configuration and weights title A, summary B, details C, and the JSONB
+skills/capabilities/business-outcomes text D. PostgreSQL recomputes the vector on
+write without a trigger. A GIN index supports the `@@` predicate. The migration
+computes vectors for existing rows while adding the generated column.
 
 ## Repository behavior
 
@@ -139,11 +144,11 @@ GIN index, normalization policy, or search query is implemented yet.
 
 The new read-only contracts are:
 
-| Contract           | Method                                                 | Ordering                 |
-| ------------------ | ------------------------------------------------------ | ------------------------ |
-| EvidenceRepository | `listByProject({ tenantId, projectId, limit })`        | createdAt DESC, id DESC  |
-| BlockerRepository  | `listOpen({ tenantId, projectId?, severity?, limit })` | blockedSince ASC, id ASC |
-| NoteRepository     | `listRecentByProject({ tenantId, projectId, limit })`  | createdAt DESC, id DESC  |
+| Contract           | Method                                                 | Ordering                          |
+| ------------------ | ------------------------------------------------------ | --------------------------------- |
+| EvidenceRepository | `listByProject(...)`, `search(...)`                    | createdAt DESC; rank DESC, id ASC |
+| BlockerRepository  | `listOpen({ tenantId, projectId?, severity?, limit })` | blockedSince ASC, id ASC          |
+| NoteRepository     | `listRecentByProject({ tenantId, projectId, limit })`  | createdAt DESC, id DESC           |
 
 Evidence returns full records including summary and details. Blocker reads always
 exclude resolved records. Project and severity filters combine with tenant scope
@@ -151,7 +156,21 @@ using AND. All three methods require integer limits from 1 through 100 and retur
 empty arrays for nonexistent or foreign-tenant projects. Malformed UUIDs/enums and
 invalid limits map to safe INVALID_INPUT errors; connection failures map to
 UNAVAILABLE. Each read is a single statement with no extra transaction or retry.
-These methods return bounded subsets, without cursors or search semantics.
+The original project-knowledge methods return bounded subsets. Evidence search is
+a separate tenant-scoped query using `websearch_to_tsquery('english', query)`, so
+callers supply ordinary user text rather than tsquery syntax. It combines the FTS
+predicate with optional project IDs, evidence types, and skills in one SQL query.
+Project and type lists use any-member semantics. Skill matching also uses
+any-member semantics and compares exact trimmed memberships case-insensitively;
+it is not fuzzy or substring matching.
+
+`ts_rank_cd` supplies the relevance score. Results sort by rank descending and
+evidence UUID ascending. Search keysets carry PostgreSQL's canonical `real` text
+plus the UUID, avoiding a JavaScript floating-point round trip in the next-page
+predicate. The application signs the cursor and binds it to the trusted tenant and
+a SHA-256 fingerprint of the normalized query and filters. Offset pagination is
+not used. Like other keyset pagination, a stable dataset is required for a stable
+multi-page snapshot; concurrent evidence edits may change rank between calls.
 
 Tenant and user repositories are deferred because no current use case needs them.
 Lookups return `null` for both nonexistent and cross-tenant identifiers. SQL
@@ -184,7 +203,9 @@ constraints, not protection against arbitrary SQL using compromised credentials.
 The initial migration is `packages/database/migrations/0000_tenancy_foundation.sql`.
 Its generated snapshot is unchanged. Milestone 2 adds
 `packages/database/migrations/0001_project_knowledge.sql`, its generated snapshot,
-and a journal entry. The new SQL creates the project composite unique constraint
+and a journal entry. Milestone 4-A adds `0002_evidence_search.sql`, which adds the
+stored generated vector and its GIN index without changing existing evidence
+fields. The Milestone 2 SQL creates the project composite unique constraint
 before adding child foreign keys: Drizzle Kit initially emitted that prerequisite
 last, so the new migration's statement order was corrected during review.
 The migration adds no data backfill and preserves existing Milestone 1 rows.
