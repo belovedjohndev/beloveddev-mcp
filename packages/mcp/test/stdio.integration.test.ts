@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -6,13 +7,18 @@ import { Client, type CallToolResult } from '@modelcontextprotocol/client';
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/client/stdio';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parseTestDatabaseUrl } from '@beloveddev/infrastructure/environment';
+import { projectEvidence } from '@beloveddev/database/schema';
 import { createTestDatabase, type TestDatabase } from '@beloveddev/test-support/test-database';
 import {
   removeTenantFixtures,
   seedTwoTenants,
   type TenantFixtures,
 } from '@beloveddev/test-support/tenant-fixtures';
-import { seedProjectKnowledge } from '@beloveddev/test-support/project-knowledge-fixtures';
+import {
+  evidenceInput,
+  seedProjectKnowledge,
+  type ProjectKnowledgeFixtures,
+} from '@beloveddev/test-support/project-knowledge-fixtures';
 import { safeErrorSchema, toolSchemas } from '../src/schemas.js';
 
 const main = fileURLToPath(new URL('../../../apps/mcp-server/dist/main.js', import.meta.url));
@@ -120,6 +126,8 @@ function rawServer(env: Record<string, string>) {
 describe('compiled MCP stdio composition with PostgreSQL', () => {
   let database: TestDatabase;
   let tenants: TenantFixtures;
+  let knowledge: ProjectKnowledgeFixtures;
+  let extraEvidenceIds: { a: string; b: string };
   beforeAll(async () => {
     database = await createTestDatabase(parseTestDatabaseUrl(process.env));
     const role = new URL(database.runtimeUrl).username;
@@ -129,7 +137,21 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
   });
   beforeEach(async () => {
     tenants = await seedTwoTenants(database.admin.db);
-    await seedProjectKnowledge(database.admin.db, tenants);
+    knowledge = await seedProjectKnowledge(database.admin.db, tenants);
+    extraEvidenceIds = { a: randomUUID(), b: randomUUID() };
+    await database.admin.db.insert(projectEvidence).values(
+      (['a', 'b'] as const).map((tenant) => ({
+        ...evidenceInput(tenants[tenant]),
+        id: extraEvidenceIds[tenant],
+        type: 'automation' as const,
+        title: 'PostgreSQL dashboard automation',
+        summary: 'A searchable operations dashboard',
+        details: 'React interface with reliable automation.',
+        skills: ['React'],
+        capabilities: ['Dashboard delivery'],
+        businessOutcomes: ['Workflow automation'],
+      })),
+    );
   });
   afterEach(async () => {
     if (tenants) await removeTenantFixtures(database.admin.db, tenants);
@@ -153,7 +175,7 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
   }
 
   it.each(['a', 'b'] as const)(
-    'SDK client reads all four tools as tenant %s through SELECT-only credentials',
+    'SDK client reads all five tools as tenant %s through SELECT-only credentials',
     async (tenant) => {
       const identity = tenants[tenant];
       const client = new Client({ name: 'stdio-smoke', version: '1.0.0' });
@@ -174,7 +196,7 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
       const requestIds: string[] = [];
       try {
         await client.connect(transport);
-        expect((await client.listTools()).tools).toHaveLength(4);
+        expect((await client.listTools()).tools).toHaveLength(5);
         const profile = toolSchemas.get_profile.output.parse(
           (await client.callTool({ name: 'get_profile', arguments: {} })).structuredContent,
         );
@@ -194,7 +216,7 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
           ).structuredContent,
         );
         expect(project.client?.id).toBe(identity.clientId);
-        expect(project.evidenceSummary).toHaveLength(1);
+        expect(project.evidenceSummary).toHaveLength(2);
         expect(project.openBlockers).toHaveLength(1);
         expect(project.recentNotes).toHaveLength(1);
         requestIds.push(project.meta.requestId);
@@ -203,7 +225,69 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
         );
         expect(blockers.blockers.map((blocker) => blocker.projectId)).toEqual([identity.projectId]);
         requestIds.push(blockers.meta.requestId);
+        const firstSearchPage = toolSchemas.search_project_evidence.output.parse(
+          (
+            await client.callTool({
+              name: 'search_project_evidence',
+              arguments: { query: 'PostgreSQL', limit: 1 },
+            })
+          ).structuredContent,
+        );
+        expect(firstSearchPage.results).toHaveLength(1);
+        expect(firstSearchPage.results[0]).toMatchObject({
+          evidenceId: extraEvidenceIds[tenant],
+          projectId: identity.projectId,
+          projectName: 'Portfolio Platform',
+          type: 'automation',
+          title: 'PostgreSQL dashboard automation',
+        });
+        expect(firstSearchPage.results[0]?.relevanceScore).toBeTypeOf('number');
+        expect(firstSearchPage.nextCursor).toBeTypeOf('string');
+        requestIds.push(firstSearchPage.meta.requestId);
+        const secondSearchPage = toolSchemas.search_project_evidence.output.parse(
+          (
+            await client.callTool({
+              name: 'search_project_evidence',
+              arguments: {
+                query: 'PostgreSQL',
+                limit: 1,
+                cursor: firstSearchPage.nextCursor,
+              },
+            })
+          ).structuredContent,
+        );
+        expect(secondSearchPage.results.map((result) => result.evidenceId)).toEqual([
+          knowledge[tenant].evidenceId,
+        ]);
+        expect(secondSearchPage.nextCursor).toBeUndefined();
+        requestIds.push(secondSearchPage.meta.requestId);
+        const filteredSearch = toolSchemas.search_project_evidence.output.parse(
+          (
+            await client.callTool({
+              name: 'search_project_evidence',
+              arguments: {
+                query: 'PostgreSQL',
+                evidenceTypes: ['architecture'],
+                skills: ['postgresql'],
+              },
+            })
+          ).structuredContent,
+        );
+        expect(filteredSearch.results.map((result) => result.evidenceId)).toEqual([
+          knowledge[tenant].evidenceId,
+        ]);
+        requestIds.push(filteredSearch.meta.requestId);
         const other = tenant === 'a' ? tenants.b : tenants.a;
+        const foreignSearch = toolSchemas.search_project_evidence.output.parse(
+          (
+            await client.callTool({
+              name: 'search_project_evidence',
+              arguments: { query: 'PostgreSQL', projectIds: [other.projectId] },
+            })
+          ).structuredContent,
+        );
+        expect(foreignSearch.results).toEqual([]);
+        requestIds.push(foreignSearch.meta.requestId);
         expect(
           safeError(
             await client.callTool({
@@ -229,10 +313,10 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
         await client.close();
       }
       expect(protocolErrors).toEqual([]);
-      expect(new Set(requestIds).size).toBe(4);
+      expect(new Set(requestIds).size).toBe(8);
       const records = logs(stderr);
       const invocations = records.filter((record) => record.event === 'mcp.invocation');
-      expect(invocations).toHaveLength(6); // SDK-rejected input never enters the application wrapper.
+      expect(invocations).toHaveLength(10); // SDK-rejected input never enters the application wrapper.
       expect(
         invocations
           .filter((record) => record.resultStatus === 'success')
@@ -275,10 +359,21 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
       expect(initialized.error).toBeUndefined();
       server.notify('notifications/initialized');
       expect((await server.request('tools/list')).result).toHaveProperty('tools');
-      for (const name of ['get_profile', 'list_projects', 'get_project', 'get_blockers'] as const) {
+      for (const name of [
+        'get_profile',
+        'list_projects',
+        'get_project',
+        'search_project_evidence',
+        'get_blockers',
+      ] as const) {
         const response = await server.request('tools/call', {
           name,
-          arguments: name === 'get_project' ? { projectId: tenants.a.projectId } : {},
+          arguments:
+            name === 'get_project'
+              ? { projectId: tenants.a.projectId }
+              : name === 'search_project_evidence'
+                ? { query: 'PostgreSQL' }
+                : {},
         });
         expect(response.error).toBeUndefined();
         const result = z
@@ -298,9 +393,9 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
       expect(await server.close()).toBe(0);
     }
     expect(server.failures).toEqual([]);
-    expect(server.output).toHaveLength(9);
+    expect(server.output).toHaveLength(10);
     const records = logs(server.stderr);
-    expect(records.filter((record) => record.event === 'mcp.invocation')).toHaveLength(4);
+    expect(records.filter((record) => record.event === 'mcp.invocation')).toHaveLength(5);
     expect(records.filter((record) => record.event === 'mcp.stopped')).toHaveLength(1);
     expect(server.output.join('')).not.toContain(secret);
     expect(server.stderr).not.toContain(secret);

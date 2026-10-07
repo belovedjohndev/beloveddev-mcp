@@ -819,9 +819,9 @@ evaluation version where applicable
 
 Prefer additive evolution where practical.
 
-## Milestone 3 SDK and application error boundary
+## MCP SDK and application error boundary
 
-The four implemented read tools use the official MCP SDK v2
+The five implemented read tools use the official MCP SDK v2
 `McpServer.registerTool()` API with strict Zod input and success-output schemas.
 
 Invalid protocol requests, unknown tools, and invalid tool argument schemas are
@@ -839,3 +839,9 @@ Error results omit `structuredContent` because the advertised output schema
 describes success. Success returns matching JSON text and `structuredContent`
 with `meta.requestId`. Neither input schemas nor permissions are relaxed to
 route SDK failures through application code.
+
+`search_project_evidence` follows this same boundary. Its MCP input exposes only
+the user query, project/evidence-type/skill filters, page limit, and opaque cursor.
+Tenant identity, PostgreSQL query controls, relevance positions, fingerprint, and
+search vector remain internal. Its success schema mirrors the application result;
+the tool is read-only and requires `projects:read`.

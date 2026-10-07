@@ -245,7 +245,7 @@ Implemented in this slice:
 - `SearchProjectEvidence` with `projects:read` authorization
 - application and real PostgreSQL tests
 
-The MCP tool is intentionally absent.
+Milestone 4-A is complete and retained unchanged.
 
 ### Milestone 4-B — MCP exposure
 
@@ -265,10 +265,11 @@ Use PostgreSQL full-text search plus structured filters.
 
 Do not use embeddings.
 
-### Remaining deliverables
+Implemented:
 
 - MCP contract tests
 - MCP schema, registration, invocation logging, and composition-root wiring
+- compiled stdio/PostgreSQL coverage for isolation, filters, and cursor pagination
 
 ### Representative Initial Portfolio Data
 

@@ -13,6 +13,7 @@ import type { GetProfile } from '@beloveddev/application/use-cases/get-profile';
 import type { ListProjects } from '@beloveddev/application/use-cases/list-projects';
 import type { GetProject } from '@beloveddev/application/use-cases/get-project';
 import type { GetBlockers } from '@beloveddev/application/use-cases/get-blockers';
+import type { SearchProjectEvidence } from '@beloveddev/application/use-cases/search-project-evidence';
 import { safeErrorSchema, toolSchemas, type ToolName } from './schemas.js';
 
 export interface ReadUseCases {
@@ -20,6 +21,7 @@ export interface ReadUseCases {
   readonly listProjects: Pick<ListProjects, 'execute'>;
   readonly getProject: Pick<GetProject, 'execute'>;
   readonly getBlockers: Pick<GetBlockers, 'execute'>;
+  readonly searchProjectEvidence: Pick<SearchProjectEvidence, 'execute'>;
 }
 export interface InvocationLog {
   readonly event: 'mcp.invocation';
@@ -129,6 +131,19 @@ export function createMcpServer(dependencies: {
     },
     (input) =>
       invoke('get_project', (context) => dependencies.useCases.getProject.execute(context, input)),
+  );
+  server.registerTool(
+    'search_project_evidence',
+    {
+      description: toolSchemas.search_project_evidence.description,
+      inputSchema: toolSchemas.search_project_evidence.input,
+      outputSchema: toolSchemas.search_project_evidence.output,
+      annotations,
+    },
+    (input) =>
+      invoke('search_project_evidence', (context) =>
+        dependencies.useCases.searchProjectEvidence.execute(context, input),
+      ),
   );
   server.registerTool(
     'get_blockers',

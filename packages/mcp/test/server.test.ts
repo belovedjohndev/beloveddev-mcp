@@ -14,6 +14,7 @@ import { GetProfile } from '@beloveddev/application/use-cases/get-profile';
 import { ListProjects } from '@beloveddev/application/use-cases/list-projects';
 import { GetProject } from '@beloveddev/application/use-cases/get-project';
 import { GetBlockers } from '@beloveddev/application/use-cases/get-blockers';
+import { SearchProjectEvidence } from '@beloveddev/application/use-cases/search-project-evidence';
 import { SignedCursorCodec } from '@beloveddev/infrastructure/signed-cursor';
 import { createReadFixture, fixtureId } from '@beloveddev/test-support/read-fixtures';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -39,6 +40,7 @@ describe('MCP SDK and application contracts', () => {
     listProjects: ListProjects;
     getProject: GetProject;
     getBlockers: GetBlockers;
+    searchProjectEvidence: SearchProjectEvidence;
   };
   let resolve: ReturnType<typeof vi.fn<(requestId: string) => Promise<RequestContext | null>>>;
 
@@ -54,6 +56,7 @@ describe('MCP SDK and application contracts', () => {
       listProjects: new ListProjects(r.projects, authorization, cursors),
       getProject: new GetProject(r, authorization),
       getBlockers: new GetBlockers(r.blockers, authorization, cursors),
+      searchProjectEvidence: new SearchProjectEvidence(r.evidence, authorization, cursors),
     };
     resolve = vi.fn((requestId: string) =>
       Promise.resolve(principal === null ? null : { ...principal, requestId }),
@@ -77,12 +80,13 @@ describe('MCP SDK and application contracts', () => {
     await server?.close();
   });
 
-  it('advertises exactly four read-only tools with strict input and success-output schemas', async () => {
+  it('advertises exactly five read-only tools with strict input and success-output schemas', async () => {
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual([
       'get_profile',
       'list_projects',
       'get_project',
+      'search_project_evidence',
       'get_blockers',
     ]);
     for (const tool of listed.tools) {
@@ -94,10 +98,17 @@ describe('MCP SDK and application contracts', () => {
       expect(tool.inputSchema['additionalProperties']).toBe(false);
       expect(tool.inputSchema.properties).not.toHaveProperty('tenantId');
       expect(tool.inputSchema.properties).not.toHaveProperty('userId');
+      expect(tool.inputSchema.properties).not.toHaveProperty('membershipId');
       expect(tool.inputSchema.properties).not.toHaveProperty('role');
       expect(tool.inputSchema.properties).not.toHaveProperty('permissions');
+      expect(tool.inputSchema.properties).not.toHaveProperty('relevanceScore');
+      expect(tool.inputSchema.properties).not.toHaveProperty('tsquery');
       expect(tool.outputSchema).toHaveProperty('type', 'object');
     }
+    const search = listed.tools.find((tool) => tool.name === 'search_project_evidence');
+    expect(search?.description).toMatch(
+      /prior project evidence.*PostgreSQL full-text relevance.*tenant.*read-only.*projects:read/i,
+    );
   });
 
   it.each([
@@ -109,6 +120,10 @@ describe('MCP SDK and application contracts', () => {
     ['list_projects', { clientId: 'invalid' }],
     ['get_project', { projectId: 'invalid' }],
     ['get_project', {}],
+    ['search_project_evidence', {}],
+    ['search_project_evidence', { query: '   ' }],
+    ['search_project_evidence', { query: 'Ownership', projectIds: ['invalid'] }],
+    ['search_project_evidence', { query: 'Ownership', tenantId: fixtureId(2) }],
     ['get_blockers', { severity: 'invalid' }],
     ['get_blockers', { userId: 'private-user' }],
   ])(
@@ -119,6 +134,7 @@ describe('MCP SDK and application contracts', () => {
         vi.spyOn(useCases.listProjects, 'execute'),
         vi.spyOn(useCases.getProject, 'execute'),
         vi.spyOn(useCases.getBlockers, 'execute'),
+        vi.spyOn(useCases.searchProjectEvidence, 'execute'),
       ];
       const result = await client.callTool({
         name,
@@ -142,12 +158,23 @@ describe('MCP SDK and application contracts', () => {
     expect(logs).toEqual([]);
   });
 
-  it.each(['get_profile', 'list_projects', 'get_project', 'get_blockers'] as const)(
+  it.each([
+    'get_profile',
+    'list_projects',
+    'get_project',
+    'search_project_evidence',
+    'get_blockers',
+  ] as const)(
     'valid %s calls share request IDs, context, safe output, and invocation logs',
     async (name) => {
       const result = await client.callTool({
         name,
-        arguments: name === 'get_project' ? { projectId: fixture.project.id } : {},
+        arguments:
+          name === 'get_project'
+            ? { projectId: fixture.project.id }
+            : name === 'search_project_evidence'
+              ? { query: 'Ownership' }
+              : {},
       });
       expect(result.isError).not.toBe(true);
       const output = toolSchemas[name].output.parse(result.structuredContent);
@@ -171,43 +198,59 @@ describe('MCP SDK and application contracts', () => {
     },
   );
 
-  it.each(['get_profile', 'list_projects', 'get_project', 'get_blockers'] as const)(
-    '%s rejects missing principal before protected repository work',
-    async (name) => {
-      principal = null;
-      const result = await client.callTool({
-        name,
-        arguments: name === 'get_project' ? { projectId: fixture.project.id } : {},
-      });
-      const payload = errorPayload(result);
-      expect(payload.error.code).toBe('UNAUTHENTICATED');
-      expect(payload.error.requestId).toBe(logs[0]?.requestId);
-      expect(fixture.calls).toEqual([]);
-    },
-  );
+  it.each([
+    'get_profile',
+    'list_projects',
+    'get_project',
+    'search_project_evidence',
+    'get_blockers',
+  ] as const)('%s rejects missing principal before protected repository work', async (name) => {
+    principal = null;
+    const result = await client.callTool({
+      name,
+      arguments:
+        name === 'get_project'
+          ? { projectId: fixture.project.id }
+          : name === 'search_project_evidence'
+            ? { query: 'Ownership' }
+            : {},
+    });
+    const payload = errorPayload(result);
+    expect(payload.error.code).toBe('UNAUTHENTICATED');
+    expect(payload.error.requestId).toBe(logs[0]?.requestId);
+    expect(fixture.calls).toEqual([]);
+  });
 
-  it.each(['get_profile', 'list_projects', 'get_project', 'get_blockers'] as const)(
-    '%s requires its permission before repository work',
-    async (name) => {
-      principal = {
-        ...fixture.context,
-        permissions: name === 'get_profile' ? ['projects:read'] : ['profile:read'],
-      };
-      const payload = errorPayload(
-        await client.callTool({
-          name,
-          arguments: name === 'get_project' ? { projectId: fixture.project.id } : {},
-        }),
-      );
-      expect(payload.error.code).toBe('FORBIDDEN');
-      expect(logs[0]).toMatchObject({
-        resultStatus: 'error',
-        errorCategory: 'FORBIDDEN',
-        requestId: payload.error.requestId,
-      });
-      expect(fixture.calls).toEqual([]);
-    },
-  );
+  it.each([
+    'get_profile',
+    'list_projects',
+    'get_project',
+    'search_project_evidence',
+    'get_blockers',
+  ] as const)('%s requires its permission before repository work', async (name) => {
+    principal = {
+      ...fixture.context,
+      permissions: name === 'get_profile' ? ['projects:read'] : ['profile:read'],
+    };
+    const payload = errorPayload(
+      await client.callTool({
+        name,
+        arguments:
+          name === 'get_project'
+            ? { projectId: fixture.project.id }
+            : name === 'search_project_evidence'
+              ? { query: 'Ownership' }
+              : {},
+      }),
+    );
+    expect(payload.error.code).toBe('FORBIDDEN');
+    expect(logs[0]).toMatchObject({
+      resultStatus: 'error',
+      errorCategory: 'FORBIDDEN',
+      requestId: payload.error.requestId,
+    });
+    expect(fixture.calls).toEqual([]);
+  });
 
   it('get_profile returns NOT_FOUND without exposing foreign profiles', async () => {
     fixture.data.profiles.splice(0, 1);
@@ -261,11 +304,96 @@ describe('MCP SDK and application contracts', () => {
     });
   });
 
-  it.each(['list_projects', 'get_blockers'] as const)(
+  it('searches evidence through the use case with structured filters and signed pagination', async () => {
+    fixture.data.evidence[0] = {
+      ...fixture.evidence,
+      skills: ['PostgreSQL'],
+      capabilities: ['Tenant isolation'],
+      businessOutcomes: ['Reliable delivery'],
+    };
+    fixture.data.evidence.push({
+      ...fixture.data.evidence[0],
+      id: fixtureId(20),
+      title: 'Ownership patterns',
+    });
+    const argumentsWithoutCursor = {
+      query: 'Ownership',
+      projectIds: [fixture.project.id],
+      evidenceTypes: ['architecture'],
+      skills: ['PostgreSQL'],
+      limit: 1,
+    };
+    const first = toolSchemas.search_project_evidence.output.parse(
+      (
+        await client.callTool({
+          name: 'search_project_evidence',
+          arguments: argumentsWithoutCursor,
+        })
+      ).structuredContent,
+    );
+    expect(first.results).toEqual([
+      {
+        evidenceId: fixture.evidence.id,
+        projectId: fixture.project.id,
+        projectName: fixture.project.name,
+        type: 'architecture',
+        title: fixture.evidence.title,
+        summary: fixture.evidence.summary,
+        skills: ['PostgreSQL'],
+        capabilities: ['Tenant isolation'],
+        businessOutcomes: ['Reliable delivery'],
+        relevanceScore: 1,
+      },
+    ]);
+    expect(first.nextCursor).toBeTypeOf('string');
+    expect(first.results[0]).not.toHaveProperty('searchVector');
+    expect(first.results[0]).not.toHaveProperty('queryFingerprint');
+    expect(fixture.calls[0]).toEqual({
+      method: 'evidenceSearch',
+      input: {
+        tenantId: fixture.context.tenantId,
+        query: 'Ownership',
+        projectIds: [fixture.project.id],
+        evidenceTypes: ['architecture'],
+        skills: ['postgresql'],
+        limit: 1,
+      },
+    });
+
+    const second = toolSchemas.search_project_evidence.output.parse(
+      (
+        await client.callTool({
+          name: 'search_project_evidence',
+          arguments: { ...argumentsWithoutCursor, cursor: first.nextCursor },
+        })
+      ).structuredContent,
+    );
+    expect(second.results.map((result) => result.evidenceId)).toEqual([fixtureId(20)]);
+    expect(second.nextCursor).toBeUndefined();
+
+    const foreign = toolSchemas.search_project_evidence.output.parse(
+      (
+        await client.callTool({
+          name: 'search_project_evidence',
+          arguments: { query: 'Ownership', projectIds: [fixture.otherProject.id] },
+        })
+      ).structuredContent,
+    );
+    expect(foreign.results).toEqual([]);
+    expect(foreign.nextCursor).toBeUndefined();
+  });
+
+  it.each(['list_projects', 'search_project_evidence', 'get_blockers'] as const)(
     '%s rejects malformed cursors as application errors without repository access',
     async (name) => {
       const payload = errorPayload(
-        await client.callTool({ name, arguments: { cursor: 'malformed' } }),
+        await client.callTool({
+          name,
+          arguments:
+            name === 'search_project_evidence'
+              ? { query: 'Ownership', cursor: 'malformed' }
+              : { cursor: 'malformed' },
+        }),
       );
       expect(payload.error.code).toBe('VALIDATION_ERROR');
       expect(logs[0]?.requestId).toBe(payload.error.requestId);
@@ -369,6 +497,25 @@ describe('MCP SDK and application contracts', () => {
       expect(JSON.stringify(result)).not.toMatch(/private SQL|internal\/path|stack|cause/);
     },
   );
+
+  it('search infrastructure failures use the shared safe INTERNAL_ERROR envelope', async () => {
+    vi.spyOn(fixture.repositories.evidence, 'search').mockRejectedValue(
+      new RepositoryError('UNAVAILABLE'),
+    );
+    const result = await client.callTool({
+      name: 'search_project_evidence',
+      arguments: { query: 'Ownership' },
+    });
+    const payload = errorPayload(result);
+    expect(payload.error.code).toBe('INTERNAL_ERROR');
+    expect(logs[0]).toMatchObject({
+      toolName: 'search_project_evidence',
+      requestId: payload.error.requestId,
+      resultStatus: 'error',
+      errorCategory: 'INTERNAL_ERROR',
+    });
+    expect(JSON.stringify(result)).not.toMatch(/postgres|stack|cause/i);
+  });
 
   it('invalid application output is safely rejected by the wrapper', async () => {
     vi.spyOn(useCases.getProfile, 'execute').mockResolvedValue({

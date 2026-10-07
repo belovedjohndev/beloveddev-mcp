@@ -14,6 +14,7 @@ import { GetProfile } from '@beloveddev/application/use-cases/get-profile';
 import { ListProjects } from '@beloveddev/application/use-cases/list-projects';
 import { GetProject } from '@beloveddev/application/use-cases/get-project';
 import { GetBlockers } from '@beloveddev/application/use-cases/get-blockers';
+import { SearchProjectEvidence } from '@beloveddev/application/use-cases/search-project-evidence';
 import { LocalRequestContextProvider } from '@beloveddev/infrastructure/local-request-context';
 import { SignedCursorCodec } from '@beloveddev/infrastructure/signed-cursor';
 import { PostgresMembershipRepository } from '@beloveddev/infrastructure/postgres/membership-repository';
@@ -76,6 +77,7 @@ try {
     listProjects: new ListProjects(projects, authorization, cursors),
     getProject: new GetProject({ projects, clients, evidence, blockers, notes }, authorization),
     getBlockers: new GetBlockers(blockers, authorization, cursors),
+    searchProjectEvidence: new SearchProjectEvidence(evidence, authorization, cursors),
   };
   const transport = new StdioServerTransport();
   handle = serveStdio(() => createMcpServer({ useCases, context, logger }), {

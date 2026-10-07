@@ -5,6 +5,7 @@ import {
   listProjectsInput,
   getProjectInput,
   getBlockersInput,
+  searchProjectEvidenceInput,
 } from '@beloveddev/application/read-inputs';
 import {
   blockerSeverities,
@@ -123,6 +124,31 @@ export const toolSchemas = {
     output: z.strictObject({
       blockers: z.array(blockerSummary.extend({ projectId: id, projectName: z.string() })),
       nextCursor: z.string().optional(),
+      meta,
+    }),
+  },
+  search_project_evidence: {
+    description:
+      'Search prior project evidence using PostgreSQL full-text relevance within the current tenant, with optional project, evidence-type, and exact skill filters. Read-only; requires projects:read.',
+    input: searchProjectEvidenceInput,
+    output: z.strictObject({
+      results: z
+        .array(
+          z.strictObject({
+            evidenceId: id,
+            projectId: id,
+            projectName: z.string(),
+            type: z.enum(evidenceTypes),
+            title: z.string(),
+            summary: z.string(),
+            skills: strings,
+            capabilities: strings,
+            businessOutcomes: strings,
+            relevanceScore: z.number().finite().nonnegative(),
+          }),
+        )
+        .max(100),
+      nextCursor: z.string().max(4096).optional(),
       meta,
     }),
   },

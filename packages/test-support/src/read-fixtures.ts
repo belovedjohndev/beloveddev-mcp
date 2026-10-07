@@ -9,6 +9,7 @@ import type {
 import type { RequestContext } from '@beloveddev/application/request-context';
 import type {
   BlockerPageQuery,
+  EvidenceSearchQuery,
   OpenBlockersQuery,
   ProjectPageQuery,
   ProjectKnowledgeQuery,
@@ -191,6 +192,58 @@ export function createReadFixture() {
         return Promise.resolve(
           data.evidence.filter((row) => childMatches(row, input)).slice(0, input.limit),
         );
+      },
+      search: (input: EvidenceSearchQuery) => {
+        calls.push({ method: 'evidenceSearch', input });
+        const rows = data.evidence
+          .filter((row) => {
+            const project = data.projects.find(
+              (candidate) =>
+                candidate.tenantId === input.tenantId && candidate.id === row.projectId,
+            );
+            const text = [
+              row.title,
+              row.summary,
+              row.details,
+              ...row.skills,
+              ...row.capabilities,
+              ...row.businessOutcomes,
+            ]
+              .join(' ')
+              .toLowerCase();
+            return (
+              row.tenantId === input.tenantId &&
+              project !== undefined &&
+              text.includes(input.query.toLowerCase()) &&
+              (input.projectIds === undefined || input.projectIds.includes(row.projectId)) &&
+              (input.evidenceTypes === undefined || input.evidenceTypes.includes(row.type)) &&
+              (input.skills === undefined ||
+                row.skills.some((skill) => input.skills?.includes(skill.toLowerCase()))) &&
+              (input.after === undefined ||
+                Number(input.after.relevanceScore) > 1 ||
+                (Number(input.after.relevanceScore) === 1 && row.id > input.after.id))
+            );
+          })
+          .sort((a, b) => (a.id < b.id ? -1 : 1));
+        const selected = rows.slice(0, input.limit);
+        const items = selected.map((row) => ({
+          evidenceId: row.id,
+          projectId: row.projectId,
+          projectName: data.projects.find((project) => project.id === row.projectId)?.name ?? '',
+          type: row.type,
+          title: row.title,
+          summary: row.summary,
+          skills: row.skills,
+          capabilities: row.capabilities,
+          businessOutcomes: row.businessOutcomes,
+          relevanceScore: 1,
+        }));
+        const last = items.at(-1);
+        return Promise.resolve({
+          items,
+          nextPosition:
+            rows.length > input.limit && last ? { id: last.evidenceId, relevanceScore: '1' } : null,
+        });
       },
     },
     blockers: {

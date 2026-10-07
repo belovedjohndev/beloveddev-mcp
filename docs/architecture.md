@@ -501,7 +501,7 @@ PostgreSQL FTS is preferred initially because it is:
 
 No vector database is required for V1.
 
-### Milestone 4-A implementation boundary
+### Milestone 4 implementation
 
 `SearchProjectEvidence` is implemented as an application use case over an
 explicit `EvidenceRepository.search` port. It authorizes `projects:read` before
@@ -514,9 +514,12 @@ ordering. Project IDs, evidence types, and exact case-folded skill memberships
 are SQL predicates. The signed cursor is bound to the tenant, normalized search
 fingerprint, canonical PostgreSQL rank, and evidence ID.
 
-Milestone 4-A stops at the repository and application boundary. MCP registration,
-transport schemas, invocation logging for this future tool, and composition-root
-wiring remain Milestone 4-B.
+Milestone 4-B exposes this use case as `search_project_evidence` through the same
+strict `McpServer.registerTool()` and shared invocation boundary as the other read
+tools. SDK-invalid input is rejected before context or repository access. Valid
+calls receive a request ID, trusted context, authorization, safe result/error
+mapping, and structured invocation logging. The composition root reuses the
+existing evidence repository, authorization policy, cursor codec, and logger.
 
 ## 15. Opportunity Evaluation Architecture
 

@@ -5,14 +5,14 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 2
+## Current status: Milestone 4
 
-The database foundation implements nine tables through two Drizzle migrations,
-including project evidence, blockers, and notes. Seven explicit repository
-contracts provide tenant-scoped access, verified against real PostgreSQL.
-The executable still validates configuration, logs, and exits; it does not open
-a database connection or start an MCP server. Authentication, application use
-cases, evidence search, opportunities, and MCP tools remain deferred.
+The stdio MCP server exposes five read-only tools backed by tenant-scoped
+PostgreSQL repositories: `get_profile`, `list_projects`, `get_project`,
+`search_project_evidence`, and `get_blockers`. Project evidence search uses a
+stored weighted English `tsvector`, deterministic PostgreSQL relevance ranking,
+structured filters, and signed keyset cursors. Opportunity workflows and
+mutations remain later milestones.
 
 ## Requirements
 
@@ -31,17 +31,18 @@ Run commands from the repository root.
 3. Start PostgreSQL: `npm run db:up`.
 4. Apply the migration chain: `npm run db:migrate`.
 5. Check everything, including real PostgreSQL tests: `npm run verify:all`.
-6. Run the foundation bootstrap: `npm start`.
+6. Run the compiled MCP stdio server: `npm start`.
 
 If port 5432 is already occupied, choose a free port in `POSTGRES_PORT` and
 update `DATABASE_URL` and `TEST_DATABASE_URL` to match before starting Compose.
 The [database guide](docs/database.md) includes a PowerShell workflow that asks
 Docker for an available host port.
 
-A valid configuration produces one JSON log on stderr and exit code 0. Invalid
-configuration produces a safe JSON error and exit code 1. Stdout stays empty for a
-future MCP stdio transport. `LOG_LEVEL=silent` suppresses successful startup logs;
-configuration errors still log. No long-running server is expected in this milestone.
+A valid configuration starts the MCP stdio transport and writes structured logs
+to stderr. Stdout is reserved exclusively for JSON-RPC protocol traffic. Invalid
+configuration produces a safe JSON error on stderr and exits with code 1.
+`LOG_LEVEL=silent` suppresses successful startup and invocation logs;
+configuration errors still log.
 
 ## Commands
 
@@ -75,21 +76,20 @@ does not require PostgreSQL; integration tests are run explicitly or through
 
 ```text
 apps/
-  mcp-server/       Composition root: environment -> logger -> exit
+  mcp-server/       Explicit database/use-case/MCP stdio composition root
 packages/
   domain/           Portable entity types and status values
-  application/      Explicit repository ports and safe repository errors
+  application/      Authorization, read use cases, repository ports, and safe errors
   database/         Drizzle schema, migration, and connection lifecycle
-  infrastructure/   Scoped PostgreSQL adapters, environment validation, and logging
-  mcp/              Reserved for transport adapters and tool contracts
+  infrastructure/   Scoped PostgreSQL/context/cursor adapters, configuration, and logging
+  mcp/              Strict tool schemas, explicit registration, and shared invocation boundary
   shared/           Reserved for demonstrated cross-cutting needs
   test-support/     Disposable databases and two-tenant fixtures
 docs/               Product, domain, architecture, contracts, and delivery plan
 ```
 
-Only `mcp` and `shared` remain metadata-only workspaces. Repository interfaces
-exist only for implemented operations; there is no generic base repository or
-dependency-injection container.
+`shared` remains metadata-only. Repository interfaces exist only for implemented
+operations; there is no generic base repository or dependency-injection container.
 
 Runtime dependencies are Zod, Pino, Drizzle ORM, and node-postgres. Drizzle Kit is
 development tooling. Node loads local environment files natively; TypeScript
@@ -98,16 +98,20 @@ of Drizzle and concrete adapters.
 
 ## Configuration
 
-| Variable            | Default                        | Purpose                                                                    |
-| ------------------- | ------------------------------ | -------------------------------------------------------------------------- |
-| `NODE_ENV`          | `development`                  | `development`, `test`, or `production`                                     |
-| `LOG_LEVEL`         | `info`                         | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, or `silent`            |
-| `DATABASE_URL`      | Required                       | PostgreSQL URL with a host and database name                               |
-| `TEST_DATABASE_URL` | Required for integration tests | Dedicated test-instance admin connection; never falls back to DATABASE_URL |
-| `POSTGRES_USER`     | Required by Compose            | Local database administrator                                               |
-| `POSTGRES_PASSWORD` | Required by Compose            | Local database password                                                    |
-| `POSTGRES_DB`       | Required by Compose            | Local database name                                                        |
-| `POSTGRES_PORT`     | `5432`                         | Host port, bound to `127.0.0.1`                                            |
+| Variable              | Default                        | Purpose                                                                     |
+| --------------------- | ------------------------------ | --------------------------------------------------------------------------- |
+| `NODE_ENV`            | `development`                  | `development`, `test`, or `production`                                      |
+| `LOG_LEVEL`           | `info`                         | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, or `silent`             |
+| `DATABASE_URL`        | Required                       | PostgreSQL URL with a host and database name                                |
+| `MCP_AUTH_MODE`       | Required                       | `local`; rejected in production until a production identity provider exists |
+| `MCP_CURSOR_SECRET`   | Required                       | Cursor HMAC secret, 32–1024 characters                                      |
+| `MCP_LOCAL_TENANT_ID` | Optional                       | Trusted local operator tenant UUID; requires `MCP_LOCAL_USER_ID`            |
+| `MCP_LOCAL_USER_ID`   | Optional                       | Trusted local operator user UUID; requires `MCP_LOCAL_TENANT_ID`            |
+| `TEST_DATABASE_URL`   | Required for integration tests | Dedicated test-instance admin connection; never falls back to DATABASE_URL  |
+| `POSTGRES_USER`       | Required by Compose            | Local database administrator                                                |
+| `POSTGRES_PASSWORD`   | Required by Compose            | Local database password                                                     |
+| `POSTGRES_DB`         | Required by Compose            | Local database name                                                         |
+| `POSTGRES_PORT`       | `5432`                         | Host port, bound to `127.0.0.1`                                             |
 
 `DATABASE_URL` validation checks URL structure, not connectivity. Both `postgres:`
 and `postgresql:` schemes are accepted. Keep the URL aligned with Compose settings;
@@ -140,14 +144,13 @@ runtime credentials. Do not reuse this Compose setup as production deployment co
 Changing initialization credentials does not update an existing database volume.
 `npm run db:down` preserves data; deleting the volume destroys it.
 
-Repositories require tenant scope in SQL. Cross-tenant lookups return null and
-knowledge listings return empty arrays. Composite foreign keys enforce both
-project/client and project-child ownership. Notes require an author membership
-and a unique tenant/author/idempotency key; blocker resolution is database constrained. No authenticated
-tenant context exists yet: future use cases must authorize explicit permissions
-and supply trusted scope. Model arguments cannot establish identity or access.
-Every schema change requires a migration. Transactional audited mutations and
-their idempotency behavior remain later milestones.
+Repositories require trusted tenant scope in SQL. The local request-context
+adapter rechecks active tenant, user, and membership state on every invocation;
+MCP arguments cannot establish identity or choose a tenant. Read use cases enforce
+`profile:read` or `projects:read` before protected repository access. Foreign
+project filters return no search results. Composite foreign keys enforce project
+ownership. Local mode is intentionally unavailable in production until a
+production identity provider is implemented.
 
 ## CI and verification
 
@@ -168,8 +171,8 @@ constraints, cleanup behavior, and Drizzle compatibility notes.
 - [Implementation plan](docs/implementation-plan.md)
 - [Agent instructions](AGENTS.md)
 
-The eight tools described in these documents are planned V1 capabilities, not
-implemented functionality.
+Five of the eight planned V1 tools are implemented. Opportunities, deterministic
+opportunity evaluation, and the audited idempotent note mutation remain planned.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
 [PostgreSQL image initialization and storage](https://hub.docker.com/_/postgres),
