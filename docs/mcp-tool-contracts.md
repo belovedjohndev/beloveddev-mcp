@@ -454,9 +454,8 @@ Structured request log only.
 
 # 9. `list_opportunities`
 
-This is the planned Milestone 5-B interface. Milestone 5-A implements the
-database, repository, and application capability only; the MCP tool is not yet
-registered.
+Implemented in Milestone 5-B through an explicit high-level SDK registration and
+the shared read-only invocation boundary.
 
 ## Purpose
 
@@ -525,8 +524,10 @@ None.
 
 ## Failure Behavior
 
-- invalid filter → `VALIDATION_ERROR`
-- malformed cursor → `VALIDATION_ERROR`
+- invalid argument schema → MCP SDK protocol-layer error before context or repository access
+- missing trusted principal → `UNAUTHENTICATED`
+- missing `opportunities:read` → `FORBIDDEN`
+- malformed or filter-incompatible cursor → `VALIDATION_ERROR`
 - infrastructure failure → `INTERNAL_ERROR`
 
 ## Audit

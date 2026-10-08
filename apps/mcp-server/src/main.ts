@@ -15,6 +15,7 @@ import { ListProjects } from '@beloveddev/application/use-cases/list-projects';
 import { GetProject } from '@beloveddev/application/use-cases/get-project';
 import { GetBlockers } from '@beloveddev/application/use-cases/get-blockers';
 import { SearchProjectEvidence } from '@beloveddev/application/use-cases/search-project-evidence';
+import { ListOpportunities } from '@beloveddev/application/use-cases/list-opportunities';
 import { LocalRequestContextProvider } from '@beloveddev/infrastructure/local-request-context';
 import { SignedCursorCodec } from '@beloveddev/infrastructure/signed-cursor';
 import { PostgresMembershipRepository } from '@beloveddev/infrastructure/postgres/membership-repository';
@@ -24,6 +25,7 @@ import { PostgresClientRepository } from '@beloveddev/infrastructure/postgres/cl
 import { PostgresEvidenceRepository } from '@beloveddev/infrastructure/postgres/evidence-repository';
 import { PostgresBlockerRepository } from '@beloveddev/infrastructure/postgres/blocker-repository';
 import { PostgresNoteRepository } from '@beloveddev/infrastructure/postgres/note-repository';
+import { PostgresOpportunityRepository } from '@beloveddev/infrastructure/postgres/opportunity-repository';
 import { createMcpServer } from '@beloveddev/mcp/server';
 
 let database: DatabaseConnection | undefined;
@@ -64,6 +66,7 @@ try {
   const blockers = new PostgresBlockerRepository(database.db);
   const notes = new PostgresNoteRepository(database.db);
   const profiles = new PostgresDeveloperProfileRepository(database.db);
+  const opportunities = new PostgresOpportunityRepository(database.db);
   const authorization = new PermissionAuthorization();
   const cursors = new SignedCursorCodec(environment.MCP_CURSOR_SECRET);
   const context = new LocalRequestContextProvider(
@@ -78,6 +81,7 @@ try {
     getProject: new GetProject({ projects, clients, evidence, blockers, notes }, authorization),
     getBlockers: new GetBlockers(blockers, authorization, cursors),
     searchProjectEvidence: new SearchProjectEvidence(evidence, authorization, cursors),
+    listOpportunities: new ListOpportunities(opportunities, authorization, cursors),
   };
   const transport = new StdioServerTransport();
   handle = serveStdio(() => createMcpServer({ useCases, context, logger }), {

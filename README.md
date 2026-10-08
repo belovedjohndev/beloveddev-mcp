@@ -5,16 +5,16 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 5-A
+## Current status: Milestone 5-B
 
-The stdio MCP server exposes five read-only tools backed by tenant-scoped
+The stdio MCP server exposes six read-only tools backed by tenant-scoped
 PostgreSQL repositories: `get_profile`, `list_projects`, `get_project`,
-`search_project_evidence`, and `get_blockers`. Project evidence search uses a
-stored weighted English `tsvector`, deterministic PostgreSQL relevance ranking,
-structured filters, and signed keyset cursors. Opportunity workflows and
-mutations remain later milestones. The tenant-scoped opportunity schema,
-PostgreSQL repository, and authorized `ListOpportunities` application use case
-are implemented, but `list_opportunities` is not registered as an MCP tool yet.
+`search_project_evidence`, `get_blockers`, and `list_opportunities`. Project
+evidence search uses a stored weighted English `tsvector`, deterministic
+PostgreSQL relevance ranking, structured filters, and signed keyset cursors.
+Opportunity listing uses exact structured filters, a literal cross-field query,
+and signed deterministic keyset pagination. Evaluation and mutations remain
+later milestones.
 
 ## Requirements
 
@@ -173,9 +173,8 @@ constraints, cleanup behavior, and Drizzle compatibility notes.
 - [Implementation plan](docs/implementation-plan.md)
 - [Agent instructions](AGENTS.md)
 
-Five of the eight planned V1 tools are implemented. Opportunity listing is ready
-at the database and application layers; MCP exposure, deterministic opportunity
-evaluation, and the audited idempotent note mutation remain planned.
+Six of the eight planned V1 tools are implemented. Deterministic opportunity
+evaluation and the audited idempotent note mutation remain planned.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
 [PostgreSQL image initialization and storage](https://hub.docker.com/_/postgres),

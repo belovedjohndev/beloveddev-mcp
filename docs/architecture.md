@@ -522,7 +522,7 @@ calls receive a request ID, trusted context, authorization, safe result/error
 mapping, and structured invocation logging. The composition root reuses the
 existing evidence repository, authorization policy, cursor codec, and logger.
 
-### Milestone 5-A opportunity listing
+### Milestone 5 opportunity listing
 
 `ListOpportunities` is an application capability over an explicit
 `OpportunityRepository.listPage` port. It authorizes `opportunities:read` before
@@ -534,9 +534,14 @@ The PostgreSQL adapter combines tenant scope with optional status, exact canonic
 source, and literal case-insensitive text predicates. Results use
 `coalesce(published_at, created_at) DESC, id DESC` keyset ordering. The signed
 cursor carries that timestamp and UUID and is bound to a SHA-256 fingerprint of
-the tenant and every supported normalized filter. The database and application
-capability are implemented without MCP registration or composition-root wiring;
-that interface work remains Milestone 5-B.
+the tenant and every supported normalized filter.
+
+Milestone 5-B exposes the use case as `list_opportunities` through an explicit
+`McpServer.registerTool()` call. The strict transport schema contains only status,
+source, query, limit, and cursor; trusted identity and tenant scope still come
+from the context provider. The composition root reuses the existing opportunity
+repository, authorization policy, cursor codec, safe invocation boundary, and
+structured logger.
 
 ## 15. Opportunity Evaluation Architecture
 

@@ -5,18 +5,25 @@ import {
   listProjectsInput,
   getProjectInput,
   getBlockersInput,
+  listOpportunitiesInput,
   searchProjectEvidenceInput,
 } from '@beloveddev/application/read-inputs';
 import {
   blockerSeverities,
   evidenceTypes,
   noteCategories,
+  opportunityBudgetTypes,
+  opportunityStatuses,
   projectStatuses,
 } from '@beloveddev/domain/entities';
 
 const id = z.uuid();
 const date = z.iso.datetime();
 const strings = z.array(z.string());
+const decimalAmount = z
+  .string()
+  .regex(/^(?:0|[1-9]\d{0,9})\.\d{2}$/)
+  .nullable();
 const meta = z.strictObject({ requestId: id });
 const client = z.strictObject({ id, name: z.string() }).nullable();
 const projectSummary = z.strictObject({
@@ -145,6 +152,38 @@ export const toolSchemas = {
             capabilities: strings,
             businessOutcomes: strings,
             relevanceScore: z.number().finite().nonnegative(),
+          }),
+        )
+        .max(100),
+      nextCursor: z.string().max(4096).optional(),
+      meta,
+    }),
+  },
+  list_opportunities: {
+    description:
+      'Read a page of current tenant opportunities. Optional exact status/source filters and a literal case-insensitive title/client/description/project-type query; limit defaults to 20 (max 100). Reuse nextCursor with the same filters. Makes no changes; requires opportunities:read.',
+    input: listOpportunitiesInput,
+    output: z.strictObject({
+      opportunities: z
+        .array(
+          z.strictObject({
+            id,
+            source: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+            title: z.string(),
+            clientName: z.string().nullable(),
+            projectType: z.string().nullable(),
+            budgetType: z.enum(opportunityBudgetTypes).nullable(),
+            amountMin: decimalAmount,
+            amountMax: decimalAmount,
+            currency: z
+              .string()
+              .regex(/^[A-Z]{3}$/)
+              .nullable(),
+            requiredSkills: strings,
+            preferredSkills: strings,
+            status: z.enum(opportunityStatuses),
+            sourceUrl: z.string().nullable(),
+            publishedAt: date.nullable(),
           }),
         )
         .max(100),

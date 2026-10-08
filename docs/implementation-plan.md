@@ -320,8 +320,7 @@ Implemented in this slice:
 - `ListOpportunities` with `opportunities:read` authorization
 - application and real PostgreSQL tests
 
-M5-A does not register an MCP tool or wire this use case into the stdio
-composition root.
+M5-A stops at the application boundary; Milestone 5-B adds the interface below.
 
 ### Milestone 5-B — MCP exposure
 
@@ -335,7 +334,7 @@ Expose the implemented read-only opportunity listing through MCP.
 list_opportunities
 ```
 
-### Deliverables
+### Implemented
 
 - MCP input and output schemas
 - explicit tool registration
@@ -347,6 +346,12 @@ list_opportunities
 
 An MCP client can list stored opportunities reliably and safely through the
 existing trusted-context and shared invocation boundary.
+
+Milestone 5-B is complete. Contract tests cover strict SDK input rejection,
+trusted context, authorization, output validation, signed cursors, safe errors,
+and invocation logs. Compiled stdio tests exercise tenant isolation, structured
+filters, and multi-page reads against real PostgreSQL through SELECT-only runtime
+credentials.
 
 No Upwork/Gmail/browser synchronization is included yet.
 

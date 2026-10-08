@@ -14,6 +14,7 @@ import type { ListProjects } from '@beloveddev/application/use-cases/list-projec
 import type { GetProject } from '@beloveddev/application/use-cases/get-project';
 import type { GetBlockers } from '@beloveddev/application/use-cases/get-blockers';
 import type { SearchProjectEvidence } from '@beloveddev/application/use-cases/search-project-evidence';
+import type { ListOpportunities } from '@beloveddev/application/use-cases/list-opportunities';
 import { safeErrorSchema, toolSchemas, type ToolName } from './schemas.js';
 
 export interface ReadUseCases {
@@ -22,6 +23,7 @@ export interface ReadUseCases {
   readonly getProject: Pick<GetProject, 'execute'>;
   readonly getBlockers: Pick<GetBlockers, 'execute'>;
   readonly searchProjectEvidence: Pick<SearchProjectEvidence, 'execute'>;
+  readonly listOpportunities: Pick<ListOpportunities, 'execute'>;
 }
 export interface InvocationLog {
   readonly event: 'mcp.invocation';
@@ -156,6 +158,19 @@ export function createMcpServer(dependencies: {
     (input) =>
       invoke('get_blockers', (context) =>
         dependencies.useCases.getBlockers.execute(context, input),
+      ),
+  );
+  server.registerTool(
+    'list_opportunities',
+    {
+      description: toolSchemas.list_opportunities.description,
+      inputSchema: toolSchemas.list_opportunities.input,
+      outputSchema: toolSchemas.list_opportunities.output,
+      annotations,
+    },
+    (input) =>
+      invoke('list_opportunities', (context) =>
+        dependencies.useCases.listOpportunities.execute(context, input),
       ),
   );
   return server;

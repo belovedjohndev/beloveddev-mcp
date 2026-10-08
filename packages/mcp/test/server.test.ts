@@ -15,6 +15,9 @@ import { ListProjects } from '@beloveddev/application/use-cases/list-projects';
 import { GetProject } from '@beloveddev/application/use-cases/get-project';
 import { GetBlockers } from '@beloveddev/application/use-cases/get-blockers';
 import { SearchProjectEvidence } from '@beloveddev/application/use-cases/search-project-evidence';
+import { ListOpportunities } from '@beloveddev/application/use-cases/list-opportunities';
+import type { OpportunityListQuery, OpportunityPage } from '@beloveddev/application/repositories';
+import type { Opportunity } from '@beloveddev/domain/entities';
 import { SignedCursorCodec } from '@beloveddev/infrastructure/signed-cursor';
 import { createReadFixture, fixtureId } from '@beloveddev/test-support/read-fixtures';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,7 +44,12 @@ describe('MCP SDK and application contracts', () => {
     getProject: GetProject;
     getBlockers: GetBlockers;
     searchProjectEvidence: SearchProjectEvidence;
+    listOpportunities: ListOpportunities;
   };
+  let opportunity: Opportunity;
+  let listOpportunityPage: ReturnType<
+    typeof vi.fn<(input: OpportunityListQuery) => Promise<OpportunityPage>>
+  >;
   let resolve: ReturnType<typeof vi.fn<(requestId: string) => Promise<RequestContext | null>>>;
 
   beforeEach(async () => {
@@ -51,12 +59,42 @@ describe('MCP SDK and application contracts', () => {
     const authorization = new PermissionAuthorization();
     const cursors = new SignedCursorCodec('contract-test-secret-at-least-32-bytes');
     const r = fixture.repositories;
+    opportunity = {
+      id: fixtureId(40),
+      tenantId: fixture.context.tenantId,
+      source: 'upwork',
+      externalId: 'private-external-id',
+      title: 'TypeScript platform',
+      clientName: 'Example Client',
+      description: 'Private complete opportunity description',
+      projectType: 'SaaS',
+      budgetType: 'fixed',
+      amountMin: '5000.00',
+      amountMax: '9000.00',
+      currency: 'USD',
+      requiredSkills: ['TypeScript'],
+      preferredSkills: ['PostgreSQL'],
+      status: 'reviewing',
+      sourceUrl: 'https://example.test/opportunities/40',
+      publishedAt: new Date('2026-09-01T12:00:00Z'),
+      createdAt: new Date('2026-09-01T12:00:00Z'),
+      updatedAt: new Date('2026-09-01T12:00:00Z'),
+    };
+    listOpportunityPage = vi.fn((input) => {
+      fixture.calls.push({ method: 'opportunities', input });
+      return Promise.resolve({ items: [opportunity], nextPosition: null });
+    });
     useCases = {
       getProfile: new GetProfile(r.profiles, authorization),
       listProjects: new ListProjects(r.projects, authorization, cursors),
       getProject: new GetProject(r, authorization),
       getBlockers: new GetBlockers(r.blockers, authorization, cursors),
       searchProjectEvidence: new SearchProjectEvidence(r.evidence, authorization, cursors),
+      listOpportunities: new ListOpportunities(
+        { listPage: listOpportunityPage },
+        authorization,
+        cursors,
+      ),
     };
     resolve = vi.fn((requestId: string) =>
       Promise.resolve(principal === null ? null : { ...principal, requestId }),
@@ -80,7 +118,7 @@ describe('MCP SDK and application contracts', () => {
     await server?.close();
   });
 
-  it('advertises exactly five read-only tools with strict input and success-output schemas', async () => {
+  it('advertises exactly six read-only tools with strict input and success-output schemas', async () => {
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual([
       'get_profile',
@@ -88,6 +126,7 @@ describe('MCP SDK and application contracts', () => {
       'get_project',
       'search_project_evidence',
       'get_blockers',
+      'list_opportunities',
     ]);
     for (const tool of listed.tools) {
       expect(tool.annotations).toMatchObject({
@@ -109,6 +148,10 @@ describe('MCP SDK and application contracts', () => {
     expect(search?.description).toMatch(
       /prior project evidence.*PostgreSQL full-text relevance.*tenant.*read-only.*projects:read/i,
     );
+    const opportunities = listed.tools.find((tool) => tool.name === 'list_opportunities');
+    expect(opportunities?.description).toMatch(
+      /current tenant opportunities.*exact status\/source.*case-insensitive.*makes no changes.*opportunities:read/i,
+    );
   });
 
   it.each([
@@ -126,6 +169,12 @@ describe('MCP SDK and application contracts', () => {
     ['search_project_evidence', { query: 'Ownership', tenantId: fixtureId(2) }],
     ['get_blockers', { severity: 'invalid' }],
     ['get_blockers', { userId: 'private-user' }],
+    ['list_opportunities', { limit: 0 }],
+    ['list_opportunities', { limit: 101 }],
+    ['list_opportunities', { status: 'invalid' }],
+    ['list_opportunities', { source: 'not valid' }],
+    ['list_opportunities', { query: '   ' }],
+    ['list_opportunities', { tenantId: fixtureId(2) }],
   ])(
     'SDK rejects malformed %s arguments before context, use cases, or repositories',
     async (name, args) => {
@@ -135,6 +184,7 @@ describe('MCP SDK and application contracts', () => {
         vi.spyOn(useCases.getProject, 'execute'),
         vi.spyOn(useCases.getBlockers, 'execute'),
         vi.spyOn(useCases.searchProjectEvidence, 'execute'),
+        vi.spyOn(useCases.listOpportunities, 'execute'),
       ];
       const result = await client.callTool({
         name,
@@ -164,6 +214,7 @@ describe('MCP SDK and application contracts', () => {
     'get_project',
     'search_project_evidence',
     'get_blockers',
+    'list_opportunities',
   ] as const)(
     'valid %s calls share request IDs, context, safe output, and invocation logs',
     async (name) => {
@@ -204,6 +255,7 @@ describe('MCP SDK and application contracts', () => {
     'get_project',
     'search_project_evidence',
     'get_blockers',
+    'list_opportunities',
   ] as const)('%s rejects missing principal before protected repository work', async (name) => {
     principal = null;
     const result = await client.callTool({
@@ -227,6 +279,7 @@ describe('MCP SDK and application contracts', () => {
     'get_project',
     'search_project_evidence',
     'get_blockers',
+    'list_opportunities',
   ] as const)('%s requires its permission before repository work', async (name) => {
     principal = {
       ...fixture.context,
@@ -302,6 +355,97 @@ describe('MCP SDK and application contracts', () => {
       method: 'projects',
       input: { tenantId: fixture.context.tenantId, limit: 20 },
     });
+  });
+
+  it('lists opportunities with strict output, trusted tenant scope, filters, and signed continuation', async () => {
+    const secondOpportunity: Opportunity = {
+      ...opportunity,
+      id: fixtureId(41),
+      title: 'Second TypeScript platform',
+      publishedAt: new Date('2026-08-01T12:00:00Z'),
+    };
+    listOpportunityPage
+      .mockResolvedValueOnce({
+        items: [opportunity],
+        nextPosition: {
+          id: opportunity.id,
+          orderingTimestamp: '2026-09-01T12:00:00.000000Z',
+        },
+      })
+      .mockResolvedValueOnce({ items: [secondOpportunity], nextPosition: null });
+    const argumentsWithoutCursor = {
+      status: 'reviewing',
+      source: ' UPWORK ',
+      query: ' TYPESCRIPT ',
+      limit: 1,
+    } as const;
+    const first = toolSchemas.list_opportunities.output.parse(
+      (
+        await client.callTool({
+          name: 'list_opportunities',
+          arguments: argumentsWithoutCursor,
+        })
+      ).structuredContent,
+    );
+    expect(first.opportunities).toEqual([
+      {
+        id: opportunity.id,
+        source: 'upwork',
+        title: opportunity.title,
+        clientName: opportunity.clientName,
+        projectType: opportunity.projectType,
+        budgetType: opportunity.budgetType,
+        amountMin: opportunity.amountMin,
+        amountMax: opportunity.amountMax,
+        currency: opportunity.currency,
+        requiredSkills: opportunity.requiredSkills,
+        preferredSkills: opportunity.preferredSkills,
+        status: opportunity.status,
+        sourceUrl: opportunity.sourceUrl,
+        publishedAt: opportunity.publishedAt?.toISOString(),
+      },
+    ]);
+    expect(first.nextCursor).toBeTypeOf('string');
+    expect(first.opportunities[0]).not.toHaveProperty('tenantId');
+    expect(first.opportunities[0]).not.toHaveProperty('externalId');
+    expect(first.opportunities[0]).not.toHaveProperty('description');
+    expect(listOpportunityPage).toHaveBeenNthCalledWith(1, {
+      tenantId: fixture.context.tenantId,
+      status: 'reviewing',
+      source: 'upwork',
+      query: 'typescript',
+      limit: 1,
+    });
+
+    const second = toolSchemas.list_opportunities.output.parse(
+      (
+        await client.callTool({
+          name: 'list_opportunities',
+          arguments: { ...argumentsWithoutCursor, cursor: first.nextCursor },
+        })
+      ).structuredContent,
+    );
+    expect(second.opportunities.map((row) => row.id)).toEqual([secondOpportunity.id]);
+    expect(second.nextCursor).toBeUndefined();
+    expect(listOpportunityPage.mock.calls[1]?.[0]).toMatchObject({
+      tenantId: fixture.context.tenantId,
+      status: 'reviewing',
+      source: 'upwork',
+      query: 'typescript',
+      limit: 1,
+      after: {
+        id: opportunity.id,
+        orderingTimestamp: '2026-09-01T12:00:00.000000Z',
+      },
+    });
+
+    await expect(
+      client.callTool({
+        name: 'list_opportunities',
+        arguments: { ...argumentsWithoutCursor, query: 'different', cursor: first.nextCursor },
+      }),
+    ).resolves.toMatchObject({ isError: true });
+    expect(listOpportunityPage).toHaveBeenCalledTimes(2);
   });
 
   it('searches evidence through the use case with structured filters and signed pagination', async () => {
@@ -383,7 +527,12 @@ describe('MCP SDK and application contracts', () => {
     expect(foreign.nextCursor).toBeUndefined();
   });
 
-  it.each(['list_projects', 'search_project_evidence', 'get_blockers'] as const)(
+  it.each([
+    'list_projects',
+    'search_project_evidence',
+    'get_blockers',
+    'list_opportunities',
+  ] as const)(
     '%s rejects malformed cursors as application errors without repository access',
     async (name) => {
       const payload = errorPayload(
@@ -510,6 +659,20 @@ describe('MCP SDK and application contracts', () => {
     expect(payload.error.code).toBe('INTERNAL_ERROR');
     expect(logs[0]).toMatchObject({
       toolName: 'search_project_evidence',
+      requestId: payload.error.requestId,
+      resultStatus: 'error',
+      errorCategory: 'INTERNAL_ERROR',
+    });
+    expect(JSON.stringify(result)).not.toMatch(/postgres|stack|cause/i);
+  });
+
+  it('opportunity infrastructure failures use the shared safe INTERNAL_ERROR envelope', async () => {
+    listOpportunityPage.mockRejectedValueOnce(new RepositoryError('UNAVAILABLE'));
+    const result = await client.callTool({ name: 'list_opportunities', arguments: {} });
+    const payload = errorPayload(result);
+    expect(payload.error.code).toBe('INTERNAL_ERROR');
+    expect(logs[0]).toMatchObject({
+      toolName: 'list_opportunities',
       requestId: payload.error.requestId,
       resultStatus: 'error',
       errorCategory: 'INTERNAL_ERROR',

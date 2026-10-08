@@ -19,6 +19,7 @@ import {
   seedProjectKnowledge,
   type ProjectKnowledgeFixtures,
 } from '@beloveddev/test-support/project-knowledge-fixtures';
+import { seedOpportunity } from '@beloveddev/test-support/opportunity-fixtures';
 import { safeErrorSchema, toolSchemas } from '../src/schemas.js';
 
 const main = fileURLToPath(new URL('../../../apps/mcp-server/dist/main.js', import.meta.url));
@@ -128,6 +129,16 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
   let tenants: TenantFixtures;
   let knowledge: ProjectKnowledgeFixtures;
   let extraEvidenceIds: { a: string; b: string };
+  let opportunityIds: Record<
+    'a' | 'b',
+    {
+      newer: string;
+      older: string;
+      statusExcluded: string;
+      sourceExcluded: string;
+      queryExcluded: string;
+    }
+  >;
   beforeAll(async () => {
     database = await createTestDatabase(parseTestDatabaseUrl(process.env));
     const role = new URL(database.runtimeUrl).username;
@@ -152,6 +163,61 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
         businessOutcomes: ['Workflow automation'],
       })),
     );
+    opportunityIds = {
+      a: {
+        newer: randomUUID(),
+        older: randomUUID(),
+        statusExcluded: randomUUID(),
+        sourceExcluded: randomUUID(),
+        queryExcluded: randomUUID(),
+      },
+      b: {
+        newer: randomUUID(),
+        older: randomUUID(),
+        statusExcluded: randomUUID(),
+        sourceExcluded: randomUUID(),
+        queryExcluded: randomUUID(),
+      },
+    };
+    for (const tenant of ['a', 'b'] as const) {
+      await seedOpportunity(database.admin.db, tenants[tenant].tenantId, {
+        id: opportunityIds[tenant].newer,
+        source: 'upwork',
+        status: 'reviewing',
+        title: 'PostgreSQL platform opportunity',
+        publishedAt: new Date('2026-09-03T12:00:00Z'),
+      });
+      await seedOpportunity(database.admin.db, tenants[tenant].tenantId, {
+        id: opportunityIds[tenant].older,
+        source: 'upwork',
+        status: 'reviewing',
+        title: 'Second PostgreSQL opportunity',
+        publishedAt: new Date('2026-09-02T12:00:00Z'),
+      });
+      await seedOpportunity(database.admin.db, tenants[tenant].tenantId, {
+        id: opportunityIds[tenant].statusExcluded,
+        source: 'upwork',
+        status: 'new',
+        title: 'Status-excluded PostgreSQL opportunity',
+        publishedAt: new Date('2026-09-04T12:00:00Z'),
+      });
+      await seedOpportunity(database.admin.db, tenants[tenant].tenantId, {
+        id: opportunityIds[tenant].sourceExcluded,
+        source: 'manual',
+        status: 'reviewing',
+        title: 'Source-excluded PostgreSQL opportunity',
+        publishedAt: new Date('2026-09-05T12:00:00Z'),
+      });
+      await seedOpportunity(database.admin.db, tenants[tenant].tenantId, {
+        id: opportunityIds[tenant].queryExcluded,
+        source: 'upwork',
+        status: 'reviewing',
+        title: 'Query-excluded unrelated record',
+        description: 'No matching technology term.',
+        projectType: 'Other',
+        publishedAt: new Date('2026-09-06T12:00:00Z'),
+      });
+    }
   });
   afterEach(async () => {
     if (tenants) await removeTenantFixtures(database.admin.db, tenants);
@@ -175,7 +241,7 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
   }
 
   it.each(['a', 'b'] as const)(
-    'SDK client reads all five tools as tenant %s through SELECT-only credentials',
+    'SDK client reads all six tools as tenant %s through SELECT-only credentials',
     async (tenant) => {
       const identity = tenants[tenant];
       const client = new Client({ name: 'stdio-smoke', version: '1.0.0' });
@@ -196,7 +262,7 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
       const requestIds: string[] = [];
       try {
         await client.connect(transport);
-        expect((await client.listTools()).tools).toHaveLength(5);
+        expect((await client.listTools()).tools).toHaveLength(6);
         const profile = toolSchemas.get_profile.output.parse(
           (await client.callTool({ name: 'get_profile', arguments: {} })).structuredContent,
         );
@@ -225,6 +291,44 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
         );
         expect(blockers.blockers.map((blocker) => blocker.projectId)).toEqual([identity.projectId]);
         requestIds.push(blockers.meta.requestId);
+        const opportunityArguments = {
+          status: 'reviewing',
+          source: ' UPWORK ',
+          query: ' POSTGRESQL ',
+          limit: 1,
+        } as const;
+        const firstOpportunityPage = toolSchemas.list_opportunities.output.parse(
+          (
+            await client.callTool({
+              name: 'list_opportunities',
+              arguments: opportunityArguments,
+            })
+          ).structuredContent,
+        );
+        expect(firstOpportunityPage.opportunities.map((row) => row.id)).toEqual([
+          opportunityIds[tenant].newer,
+        ]);
+        expect(firstOpportunityPage.nextCursor).toBeTypeOf('string');
+        expect(firstOpportunityPage.opportunities[0]).not.toHaveProperty('tenantId');
+        expect(firstOpportunityPage.opportunities[0]).not.toHaveProperty('externalId');
+        expect(firstOpportunityPage.opportunities[0]).not.toHaveProperty('description');
+        requestIds.push(firstOpportunityPage.meta.requestId);
+        const secondOpportunityPage = toolSchemas.list_opportunities.output.parse(
+          (
+            await client.callTool({
+              name: 'list_opportunities',
+              arguments: {
+                ...opportunityArguments,
+                cursor: firstOpportunityPage.nextCursor,
+              },
+            })
+          ).structuredContent,
+        );
+        expect(secondOpportunityPage.opportunities.map((row) => row.id)).toEqual([
+          opportunityIds[tenant].older,
+        ]);
+        expect(secondOpportunityPage.nextCursor).toBeUndefined();
+        requestIds.push(secondOpportunityPage.meta.requestId);
         const firstSearchPage = toolSchemas.search_project_evidence.output.parse(
           (
             await client.callTool({
@@ -313,10 +417,10 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
         await client.close();
       }
       expect(protocolErrors).toEqual([]);
-      expect(new Set(requestIds).size).toBe(8);
+      expect(new Set(requestIds).size).toBe(10);
       const records = logs(stderr);
       const invocations = records.filter((record) => record.event === 'mcp.invocation');
-      expect(invocations).toHaveLength(10); // SDK-rejected input never enters the application wrapper.
+      expect(invocations).toHaveLength(12); // SDK-rejected input never enters the application wrapper.
       expect(
         invocations
           .filter((record) => record.resultStatus === 'success')
@@ -365,6 +469,7 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
         'get_project',
         'search_project_evidence',
         'get_blockers',
+        'list_opportunities',
       ] as const) {
         const response = await server.request('tools/call', {
           name,
@@ -393,9 +498,9 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
       expect(await server.close()).toBe(0);
     }
     expect(server.failures).toEqual([]);
-    expect(server.output).toHaveLength(10);
+    expect(server.output).toHaveLength(11);
     const records = logs(server.stderr);
-    expect(records.filter((record) => record.event === 'mcp.invocation')).toHaveLength(5);
+    expect(records.filter((record) => record.event === 'mcp.invocation')).toHaveLength(6);
     expect(records.filter((record) => record.event === 'mcp.stopped')).toHaveLength(1);
     expect(server.output.join('')).not.toContain(secret);
     expect(server.stderr).not.toContain(secret);
