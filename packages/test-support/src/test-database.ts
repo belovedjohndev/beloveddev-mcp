@@ -58,7 +58,7 @@ export async function createTestDatabase(
     await admin.pool.query(`REVOKE CREATE ON SCHEMA public FROM PUBLIC`);
     await admin.pool.query(`GRANT USAGE ON SCHEMA public TO "${roleName}"`);
     await admin.pool.query(
-      `GRANT SELECT ON tenant_memberships, developer_profiles, clients, projects, project_evidence, project_blockers, project_notes TO "${roleName}"`,
+      `GRANT SELECT ON tenant_memberships, developer_profiles, clients, projects, project_evidence, project_blockers, project_notes, opportunities TO "${roleName}"`,
     );
     await admin.pool.query(`GRANT SELECT (id, status) ON tenants, users TO "${roleName}"`);
     await admin.pool.query(`GRANT INSERT ON projects TO "${roleName}"`);

@@ -30,6 +30,13 @@ const evidenceSearch: PageCursor = {
   queryFingerprint: 'a'.repeat(64),
   position: { id: fixtureId(2), relevanceScore: '0.123456' },
 };
+const opportunities: PageCursor = {
+  version: 1,
+  kind: 'opportunities',
+  tenantId: fixtureId(1),
+  filterFingerprint: 'b'.repeat(64),
+  position: { id: fixtureId(2), orderingTimestamp: '2026-09-01T12:00:00.123456Z' },
+};
 function sign(value: unknown) {
   const payload = Buffer.from(JSON.stringify(value)).toString('base64url');
   return (
@@ -39,7 +46,7 @@ function sign(value: unknown) {
   );
 }
 describe('signed cursor integrity', () => {
-  it.each([projects, blockers, evidenceSearch])(
+  it.each([projects, blockers, evidenceSearch, opportunities])(
     'round trips deterministic versioned $kind positions',
     (cursor) => {
       const token = codec.encode(cursor);
@@ -75,6 +82,12 @@ describe('signed cursor integrity', () => {
     { ...evidenceSearch, position: { id: 'invalid', relevanceScore: '0.5' } },
     { ...evidenceSearch, position: { id: fixtureId(2), relevanceScore: 'NaN' } },
     { ...evidenceSearch, position: { id: fixtureId(2), relevanceScore: '-1' } },
+    { ...opportunities, filterFingerprint: 'invalid' },
+    {
+      ...opportunities,
+      position: { id: fixtureId(2), orderingTimestamp: '2026-09-01T12:00:00.123Z' },
+    },
+    { ...opportunities, position: { id: fixtureId(2), orderingTimestamp: 'invalid' } },
   ])('rejects signed but invalid cursor structures', (value) => {
     expect(() => codec.decode(sign(value))).toThrow('The input is invalid.');
   });

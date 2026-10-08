@@ -1,4 +1,9 @@
-import { blockerSeverities, evidenceTypes, projectStatuses } from '@beloveddev/domain/entities';
+import {
+  blockerSeverities,
+  evidenceTypes,
+  opportunityStatuses,
+  projectStatuses,
+} from '@beloveddev/domain/entities';
 import { z } from 'zod';
 import { ApplicationError } from './application-error.js';
 
@@ -24,6 +29,20 @@ export const searchProjectEvidenceInput = z.strictObject({
   projectIds: z.array(z.uuid()).min(1).max(100).optional(),
   evidenceTypes: z.array(z.enum(evidenceTypes)).min(1).max(evidenceTypes.length).optional(),
   skills: z.array(z.string().trim().min(1).max(100)).min(1).max(50).optional(),
+  limit,
+  cursor,
+});
+export const listOpportunitiesInput = z.strictObject({
+  status: z.enum(opportunityStatuses).optional(),
+  source: z
+    .string()
+    .trim()
+    .toLowerCase()
+    .min(1)
+    .max(100)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+    .optional(),
+  query: z.string().trim().toLowerCase().min(1).max(200).optional(),
   limit,
   cursor,
 });

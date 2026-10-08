@@ -454,6 +454,10 @@ Structured request log only.
 
 # 9. `list_opportunities`
 
+This is the planned Milestone 5-B interface. Milestone 5-A implements the
+database, repository, and application capability only; the MCP tool is not yet
+registered.
+
 ## Purpose
 
 List stored freelance or job opportunities.
@@ -462,8 +466,9 @@ List stored freelance or job opportunities.
 
 ```text
 status?
-source?
-query?
+source?  exact canonical lowercase slug
+query?   literal case-insensitive substring across title, client name,
+         description, and project type
 limit?
 cursor?
 ```
@@ -485,10 +490,8 @@ opportunities[]
   clientName?
   projectType?
   budgetType?
-  budgetMin?
-  budgetMax?
-  hourlyMin?
-  hourlyMax?
+  amountMin?
+  amountMax?
   currency?
   requiredSkills
   preferredSkills
@@ -501,6 +504,10 @@ nextCursor?
 meta
   requestId
 ```
+
+Results order by `coalesce(publishedAt, createdAt) DESC`, then opportunity UUID
+descending. The signed cursor carries the ordering timestamp and UUID and is
+bound to trusted tenant scope plus normalized status, source, and query filters.
 
 ## Required Permission
 

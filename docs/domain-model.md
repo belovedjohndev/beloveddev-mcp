@@ -1,10 +1,10 @@
 # BelovedDev MCP V1 — Domain Model
 
-## Milestones 1 and 2 concrete storage decisions
+## Concrete storage decisions through Milestone 5-A
 
 Implemented tables: tenants, users, tenant_memberships, developer_profiles,
-clients, projects, project_evidence, project_blockers, and project_notes.
-Opportunity and audit entities below remain proposed.
+clients, projects, project_evidence, project_blockers, project_notes, and
+opportunities. The audit entity below remains proposed.
 
 Tenant, user, and membership statuses are active/inactive; clients are
 active/archived. Email uniqueness is global and case-insensitive, without any
@@ -418,10 +418,8 @@ Opportunity
 - description
 - projectType?
 - budgetType?
-- budgetMin?
-- budgetMax?
-- hourlyMin?
-- hourlyMax?
+- amountMin?
+- amountMax?
 - currency?
 - requiredSkills
 - preferredSkills
@@ -444,6 +442,22 @@ won
 lost
 archived
 ```
+
+### Source, budget, and skills
+
+`source` is a trimmed lowercase slug of at most 100 characters matching
+`^[a-z0-9]+(?:-[a-z0-9]+)*$`. `budgetType` is either `fixed` or `hourly` and
+defines the meaning of the generic amount range. Amounts are exact nonnegative
+`numeric(12,2)` values, and maximum cannot be below minimum. A null budget type
+requires both amounts to be null; any present amount requires a budget type and
+an uppercase three-letter currency code. Required and preferred skills are strict
+JSONB string arrays.
+
+The M5-A list operation supports optional exact status/source filters and a
+literal case-insensitive substring across title, client name, description, and
+project type. It orders by `coalesce(publishedAt, createdAt) DESC`, then opportunity
+UUID descending, using a signed keyset cursor bound to trusted tenant scope and
+all supported filter semantics.
 
 ### External Identity
 
@@ -597,6 +611,8 @@ project_blockers(tenant_id, status)
 project_blockers(tenant_id, project_id, status)
 
 opportunities(tenant_id, status)
+
+opportunities(tenant_id, coalesce(published_at, created_at) DESC, id DESC)
 ```
 
 Project evidence should also receive a PostgreSQL GIN full-text search index.

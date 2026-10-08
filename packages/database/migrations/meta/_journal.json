@@ -22,6 +22,13 @@
       "when": 1791269605946,
       "tag": "0002_evidence_search",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791355403424,
+      "tag": "0003_opportunities",
+      "breakpoints": true
     }
   ]
 }

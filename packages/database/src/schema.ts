@@ -5,6 +5,8 @@ import {
   noteCategories,
   clientStatuses,
   membershipRoles,
+  opportunityBudgetTypes,
+  opportunityStatuses,
   projectStatuses,
   recordStatuses,
   type DeveloperProfile,
@@ -40,6 +42,8 @@ export const evidenceType = pgEnum('evidence_type', evidenceTypes);
 export const blockerSeverity = pgEnum('blocker_severity', blockerSeverities);
 export const blockerStatus = pgEnum('blocker_status', blockerStatuses);
 export const noteCategory = pgEnum('note_category', noteCategories);
+export const opportunityStatus = pgEnum('opportunity_status', opportunityStatuses);
+export const opportunityBudgetType = pgEnum('opportunity_budget_type', opportunityBudgetTypes);
 
 const timestamps = () => ({
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -364,5 +368,85 @@ export const projectNotes = pgTable(
     ),
     check('project_notes_content_nonblank', sql`${table.content} ~ '[^[:space:]]'`),
     check('project_notes_idempotency_key_nonblank', sql`${table.idempotencyKey} ~ '[^[:space:]]'`),
+  ],
+);
+
+export const opportunities = pgTable(
+  'opportunities',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    source: text('source').notNull(),
+    externalId: text('external_id'),
+    title: text('title').notNull(),
+    clientName: text('client_name'),
+    description: text('description').notNull(),
+    projectType: text('project_type'),
+    budgetType: opportunityBudgetType('budget_type'),
+    amountMin: numeric('amount_min', { precision: 12, scale: 2 }),
+    amountMax: numeric('amount_max', { precision: 12, scale: 2 }),
+    currency: text('currency'),
+    requiredSkills: jsonb('required_skills').$type<readonly string[]>().notNull().default([]),
+    preferredSkills: jsonb('preferred_skills').$type<readonly string[]>().notNull().default([]),
+    status: opportunityStatus('status').notNull().default('new'),
+    sourceUrl: text('source_url'),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    ...timestamps(),
+  },
+  (table) => [
+    uniqueIndex('opportunities_tenant_source_external_unique')
+      .on(table.tenantId, table.source, table.externalId)
+      .where(sql`${table.externalId} IS NOT NULL`),
+    index('opportunities_tenant_order_idx').on(
+      table.tenantId,
+      sql`coalesce(${table.publishedAt}, ${table.createdAt}) DESC`,
+      table.id.desc(),
+    ),
+    index('opportunities_tenant_status_idx').on(table.tenantId, table.status),
+    index('opportunities_tenant_source_idx').on(table.tenantId, table.source),
+    check(
+      'opportunities_source_format',
+      sql`length(${table.source}) <= 100 AND ${table.source} ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
+    ),
+    check(
+      'opportunities_external_id_nonblank',
+      sql`${table.externalId} IS NULL OR ${table.externalId} ~ '[^[:space:]]'`,
+    ),
+    check('opportunities_title_nonblank', sql`${table.title} ~ '[^[:space:]]'`),
+    check(
+      'opportunities_client_name_nonblank',
+      sql`${table.clientName} IS NULL OR ${table.clientName} ~ '[^[:space:]]'`,
+    ),
+    check('opportunities_description_nonblank', sql`${table.description} ~ '[^[:space:]]'`),
+    check(
+      'opportunities_project_type_nonblank',
+      sql`${table.projectType} IS NULL OR ${table.projectType} ~ '[^[:space:]]'`,
+    ),
+    check(
+      'opportunities_amount_min_valid',
+      sql`${table.amountMin} IS NULL OR ${table.amountMin} BETWEEN 0 AND 9999999999.99`,
+    ),
+    check(
+      'opportunities_amount_max_valid',
+      sql`${table.amountMax} IS NULL OR ${table.amountMax} BETWEEN 0 AND 9999999999.99`,
+    ),
+    check(
+      'opportunities_amounts_ordered',
+      sql`${table.amountMin} IS NULL OR ${table.amountMax} IS NULL OR ${table.amountMax} >= ${table.amountMin}`,
+    ),
+    check(
+      'opportunities_budget_consistent',
+      sql`(${table.budgetType} IS NOT NULL OR (${table.amountMin} IS NULL AND ${table.amountMax} IS NULL))
+        AND ((${table.amountMin} IS NULL AND ${table.amountMax} IS NULL)
+          OR (${table.budgetType} IS NOT NULL AND ${table.currency} IS NOT NULL))`,
+    ),
+    check(
+      'opportunities_currency_format',
+      sql`${table.currency} IS NULL OR ${table.currency} ~ '^[A-Z]{3}$'`,
+    ),
+    check('opportunities_required_skills_array', strictStringArray(table.requiredSkills)),
+    check('opportunities_preferred_skills_array', strictStringArray(table.preferredSkills)),
   ],
 );

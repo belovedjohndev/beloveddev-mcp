@@ -1,16 +1,16 @@
 # BelovedDev MCP V1 — Architecture
 
-## Milestones 1 and 2 implementation
+## Implemented architecture through Milestone 5-A
 
-The executable remains a configuration/logging bootstrap with no database
-connection or MCP transport. Database setup is an explicit migration CLI action.
+The stdio executable composes trusted local request context, application use
+cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
+logging. Database setup remains an explicit migration CLI action.
 
 The domain package defines portable records and status values; the application
-package defines membership, profile, client, project, evidence, blocker, and note
-repository ports.
-Infrastructure implements them with tenant predicates in Drizzle queries.
-The database package owns schema, migrations, and pool lifecycle. Core packages
-do not depend on persistence or transport. MCP and shared remain metadata-only.
+package defines explicit ports and authorized use cases. Infrastructure implements
+the ports with tenant predicates in Drizzle queries. The database package owns
+schema, migrations, and pool lifecycle. Core packages do not depend on persistence
+or transport. The shared package remains metadata-only.
 
 Missing and cross-tenant lookups return null; knowledge listings return empty arrays. Repository errors expose safe
 categories without raw SQL causes. Project creation is one atomic INSERT with a
@@ -19,8 +19,9 @@ authenticated, permission-checked, audited user-facing mutations remain deferred
 
 Real PostgreSQL tests apply migrations to fresh databases and use a restricted
 runtime login for repository queries, separate from migration/fixture credentials.
-Trusted tenant context and authorization are not yet implemented. There is no
-RLS policy or claim of protection against arbitrary SQL using compromised credentials.
+Trusted tenant context and permission authorization protect application access.
+There is no RLS policy or claim of protection against arbitrary SQL using
+compromised credentials.
 
 See [database conventions](database.md) for concrete schema choices, migration
 commands, test isolation, and tooling compatibility. The remaining sections
@@ -30,8 +31,8 @@ Milestone 2 adds read-only project knowledge adapters. Each SQL statement includ
 tenant scope, filters, a deterministic order, and a required 1–100 limit. No new
 transaction abstraction or use case is needed for these single-statement reads.
 Composite foreign keys protect project-child ownership and note author membership.
-Membership existence is database enforced; active membership and permission checks
-remain future application responsibilities. The note uniqueness constraint is
+Membership existence is database enforced; active membership and read permissions
+are resolved through trusted context. The note uniqueness constraint is
 storage groundwork, not the Milestone 7 retry/audit workflow.
 
 ## 1. Architectural Goal
@@ -520,6 +521,22 @@ tools. SDK-invalid input is rejected before context or repository access. Valid
 calls receive a request ID, trusted context, authorization, safe result/error
 mapping, and structured invocation logging. The composition root reuses the
 existing evidence repository, authorization policy, cursor codec, and logger.
+
+### Milestone 5-A opportunity listing
+
+`ListOpportunities` is an application capability over an explicit
+`OpportunityRepository.listPage` port. It authorizes `opportunities:read` before
+input parsing, cursor decoding, or repository access. Owner, member, and viewer
+roles receive this read permission. Trusted context supplies tenant scope; the
+input cannot choose a tenant.
+
+The PostgreSQL adapter combines tenant scope with optional status, exact canonical
+source, and literal case-insensitive text predicates. Results use
+`coalesce(published_at, created_at) DESC, id DESC` keyset ordering. The signed
+cursor carries that timestamp and UUID and is bound to a SHA-256 fingerprint of
+the tenant and every supported normalized filter. The database and application
+capability are implemented without MCP registration or composition-root wiring;
+that interface work remains Milestone 5-B.
 
 ## 15. Opportunity Evaluation Architecture
 

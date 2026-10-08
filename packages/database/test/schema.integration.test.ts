@@ -7,6 +7,7 @@ import { migrateDatabase } from '@beloveddev/database/migrate';
 import {
   clients,
   developerProfiles,
+  opportunities,
   projects,
   projectEvidence,
   projectBlockers,
@@ -36,6 +37,7 @@ const tables = [
   projectEvidence,
   projectBlockers,
   projectNotes,
+  opportunities,
 ];
 
 async function schemaSignature(database: TestDatabase) {
@@ -88,7 +90,7 @@ describe('real PostgreSQL migration and constraints', () => {
     await database?.close();
   });
 
-  it('applies to an empty database, creates exactly nine tables, and can run again safely', async () => {
+  it('applies to an empty database, creates exactly ten tables, and can run again safely', async () => {
     expect(initiallyEmpty).toBe(true);
     const result = await database.admin.pool.query<{ table_name: string }>(
       "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
@@ -96,6 +98,7 @@ describe('real PostgreSQL migration and constraints', () => {
     expect(result.rows.map((row) => row.table_name)).toEqual([
       'clients',
       'developer_profiles',
+      'opportunities',
       'project_blockers',
       'project_evidence',
       'project_notes',
@@ -108,7 +111,7 @@ describe('real PostgreSQL migration and constraints', () => {
     const journal = await database.admin.pool.query<{ count: number }>(
       'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
     );
-    expect(journal.rows).toEqual([{ count: 3 }]);
+    expect(journal.rows).toEqual([{ count: 4 }]);
   });
 
   it.each(tables.map((table) => [getTableConfig(table).name, table] as const))(
@@ -224,7 +227,7 @@ describe('real PostgreSQL migration and constraints', () => {
       const journalRows = await upgraded.admin.pool.query<{ count: number }>(
         'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
       );
-      expect(journalRows.rows).toEqual([{ count: 3 }]);
+      expect(journalRows.rows).toEqual([{ count: 4 }]);
     } finally {
       await upgraded?.close();
       // Remove only the known files in this test's uniquely created directory.
@@ -276,10 +279,65 @@ describe('real PostgreSQL migration and constraints', () => {
       const journalRows = await upgraded.admin.pool.query<{ count: number }>(
         'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
       );
-      expect(journalRows.rows).toEqual([{ count: 3 }]);
+      expect(journalRows.rows).toEqual([{ count: 4 }]);
     } finally {
       await upgraded?.close();
       for (const migration of ['0000_tenancy_foundation.sql', '0001_project_knowledge.sql'])
+        await unlink(join(folder, migration)).catch(() => undefined);
+      await unlink(join(folder, 'meta', '_journal.json')).catch(() => undefined);
+      await rmdir(join(folder, 'meta'));
+      await rmdir(folder);
+    }
+  });
+
+  it('upgrades a populated pre-M5 database without changing existing project rows', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'beloveddev-m5-upgrade-'));
+    let upgraded: TestDatabase | undefined;
+    let originalProjects: unknown[] = [];
+    const migrations = [
+      '0000_tenancy_foundation.sql',
+      '0001_project_knowledge.sql',
+      '0002_evidence_search.sql',
+    ];
+    try {
+      await mkdir(join(folder, 'meta'));
+      const journal = JSON.parse(
+        await readFile(new URL('../migrations/meta/_journal.json', import.meta.url), 'utf8'),
+      ) as { entries: unknown[] };
+      journal.entries = journal.entries.slice(0, 3);
+      await writeFile(join(folder, 'meta', '_journal.json'), JSON.stringify(journal));
+      for (const migration of migrations) {
+        await copyFile(
+          new URL(`../migrations/${migration}`, import.meta.url),
+          join(folder, migration),
+        );
+      }
+      upgraded = await createTestDatabase(parseTestDatabaseUrl(process.env), {
+        beforeMigrate: async (connection) => {
+          await migrate(connection.db, { migrationsFolder: folder });
+          await seedTwoTenants(connection.db);
+          originalProjects = (await connection.pool.query('SELECT * FROM projects ORDER BY id'))
+            .rows;
+          const absent = await connection.pool.query<{ name: string | null }>(
+            "SELECT to_regclass('public.opportunities')::text AS name",
+          );
+          expect(absent.rows).toEqual([{ name: null }]);
+        },
+      });
+      expect((await upgraded.admin.pool.query('SELECT * FROM projects ORDER BY id')).rows).toEqual(
+        originalProjects,
+      );
+      const table = await upgraded.admin.pool.query<{ name: string | null }>(
+        "SELECT to_regclass('public.opportunities')::text AS name",
+      );
+      expect(table.rows).toEqual([{ name: 'opportunities' }]);
+      const journalRows = await upgraded.admin.pool.query<{ count: number }>(
+        'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
+      );
+      expect(journalRows.rows).toEqual([{ count: 4 }]);
+    } finally {
+      await upgraded?.close();
+      for (const migration of migrations)
         await unlink(join(folder, migration)).catch(() => undefined);
       await unlink(join(folder, 'meta', '_journal.json')).catch(() => undefined);
       await rmdir(join(folder, 'meta'));

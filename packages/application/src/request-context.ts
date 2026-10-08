@@ -1,7 +1,7 @@
 import type { MembershipRole } from '@beloveddev/domain/entities';
 import { ApplicationError } from './application-error.js';
 
-export type Permission = 'profile:read' | 'projects:read';
+export type Permission = 'profile:read' | 'projects:read' | 'opportunities:read';
 
 export interface RequestContext {
   readonly requestId: string;
@@ -17,7 +17,11 @@ export interface RequestContextProvider {
   resolve(requestId: string): Promise<RequestContext | null>;
 }
 
-const readPermissions: readonly Permission[] = Object.freeze(['profile:read', 'projects:read']);
+const readPermissions: readonly Permission[] = Object.freeze([
+  'profile:read',
+  'projects:read',
+  'opportunities:read',
+]);
 const rolePermissions: Record<MembershipRole, readonly Permission[]> = {
   owner: readPermissions,
   member: readPermissions,

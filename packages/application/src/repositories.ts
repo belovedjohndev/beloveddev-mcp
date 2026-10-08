@@ -6,11 +6,18 @@ import type {
   Client,
   DeveloperProfile,
   Membership,
+  Opportunity,
+  OpportunityStatus,
   Project,
   ProjectStatus,
   EvidenceType,
 } from '@beloveddev/domain/entities';
-import type { BlockerPosition, EvidenceSearchPosition, ProjectPosition } from './pagination.js';
+import type {
+  BlockerPosition,
+  EvidenceSearchPosition,
+  OpportunityPosition,
+  ProjectPosition,
+} from './pagination.js';
 
 export interface MembershipRepository {
   getByUser(input: { tenantId: string; userId: string }): Promise<Membership | null>;
@@ -121,4 +128,22 @@ export interface BlockerPageQuery extends OpenBlockersQuery {
 export interface BlockerPage {
   readonly items: readonly { readonly blocker: ProjectBlocker; readonly projectName: string }[];
   readonly nextPosition: BlockerPosition | null;
+}
+
+export interface OpportunityListQuery {
+  readonly tenantId: string;
+  readonly status?: OpportunityStatus;
+  /** Exact match against the canonical lowercase source slug. */
+  readonly source?: string;
+  /** Literal case-insensitive substring across documented text fields. */
+  readonly query?: string;
+  readonly limit: number;
+  readonly after?: OpportunityPosition;
+}
+export interface OpportunityPage {
+  readonly items: readonly Opportunity[];
+  readonly nextPosition: OpportunityPosition | null;
+}
+export interface OpportunityRepository {
+  listPage(input: OpportunityListQuery): Promise<OpportunityPage>;
 }

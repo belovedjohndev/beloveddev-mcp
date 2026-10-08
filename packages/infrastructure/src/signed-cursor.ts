@@ -40,6 +40,16 @@ const cursorSchema = z.discriminatedUnion('kind', [
         .refine((value) => Number.isFinite(Number(value)) && Number(value) > 0),
     }),
   }),
+  z.strictObject({
+    version: z.literal(1),
+    kind: z.literal('opportunities'),
+    tenantId: z.uuid(),
+    filterFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+    position: z.strictObject({
+      id: z.uuid(),
+      orderingTimestamp: z.iso.datetime({ precision: 6 }),
+    }),
+  }),
 ]);
 
 export class SignedCursorCodec implements CursorCodec {

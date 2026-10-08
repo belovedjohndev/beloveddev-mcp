@@ -26,7 +26,7 @@ export function createReadFixture() {
     userId: fixtureId(3),
     membershipId: fixtureId(4),
     role: 'viewer',
-    permissions: ['profile:read', 'projects:read'],
+    permissions: ['profile:read', 'projects:read', 'opportunities:read'],
   };
   const otherContext: RequestContext = {
     ...context,

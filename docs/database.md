@@ -1,14 +1,14 @@
-# Database, tenancy, and project knowledge
+# Database, tenancy, project knowledge, and opportunities
 
 ## Scope and package boundaries
 
-Exactly nine tables are implemented: tenants, users, tenant_memberships,
+Exactly ten tables are implemented: tenants, users, tenant_memberships,
 developer_profiles, clients, projects, project_evidence, project_blockers, and
-project_notes. The executable remains the Milestone 0
-bootstrap; it does not open a database connection or expose tools.
+project_notes, plus opportunities. The executable composes the implemented
+read-only MCP tools; opportunity listing remains application-only in Milestone 5-A.
 
 - `domain/entities` defines portable records and status/role values.
-- `application/repositories` defines seven explicit repository contracts.
+- `application/repositories` defines eight explicit repository contracts.
 - `database/schema` contains Drizzle definitions; `database/client` owns pools.
 - `infrastructure/postgres` implements scoped queries and safe failures.
 - `test-support` provisions disposable databases and reusable two-tenant fixtures.
@@ -35,6 +35,9 @@ and record types. Test-only dependencies do not reverse production dependencies.
 | Availability                  | JSONB object; its business shape is intentionally not specified yet                                           |
 | Deletion                      | Foreign keys restrict deletion; no cascading tenant deletion                                                  |
 | Project dates                 | Both are optional; when both exist, completion cannot precede start                                           |
+| Opportunity source            | Required lowercase hyphenated slug, at most 100 characters                                                    |
+| Opportunity budget type       | Nullable enum: `fixed`, `hourly`                                                                              |
+| Opportunity status            | PostgreSQL enum matching the eight specified states                                                           |
 
 Users are global identities and may belong to multiple tenants. Email uniqueness
 does not implement email verification, account linking, or authentication. Those
@@ -133,6 +136,30 @@ skills/capabilities/business-outcomes text D. PostgreSQL recomputes the vector o
 write without a trigger. A GIN index supports the `@@` predicate. The migration
 computes vectors for existing rows while adding the generated column.
 
+## Opportunity invariants and indexes
+
+Opportunities belong directly to a tenant through a restricted foreign key.
+`source` is a required lowercase slug of at most 100 characters. When present,
+`external_id`, client name, and project type must contain a non-whitespace
+character; title and description always must. The partial unique index on
+`(tenant_id, source, external_id)` applies only when `external_id IS NOT NULL`,
+allowing manual records without an external identity while preventing duplicate
+source imports within one tenant.
+
+`budget_type` is nullable and constrained to `fixed` or `hourly`. The generic
+`amount_min` and `amount_max` columns use exact nonnegative `numeric(12,2)` values;
+when both are present, maximum cannot be lower than minimum. A null budget type
+requires both amounts to be null. Any present amount requires a budget type and
+an uppercase three-letter currency code. Required and preferred skills are strict
+JSONB string arrays and default to empty arrays.
+
+Opportunity listing sorts by `coalesce(published_at, created_at) DESC, id DESC`.
+The matching tenant-leading expression index supports this keyset path. Separate
+tenant/status and tenant/source indexes support the documented exact filters.
+The list query also accepts a literal case-insensitive substring across title,
+client name, description, and project type; LIKE metacharacters are escaped and
+there is no full-text opportunity search in M5-A.
+
 ## Repository behavior
 
 | Contract                   | Operations                                                                                |
@@ -144,11 +171,12 @@ computes vectors for existing rows while adding the generated column.
 
 The new read-only contracts are:
 
-| Contract           | Method                                                 | Ordering                          |
-| ------------------ | ------------------------------------------------------ | --------------------------------- |
-| EvidenceRepository | `listByProject(...)`, `search(...)`                    | createdAt DESC; rank DESC, id ASC |
-| BlockerRepository  | `listOpen({ tenantId, projectId?, severity?, limit })` | blockedSince ASC, id ASC          |
-| NoteRepository     | `listRecentByProject({ tenantId, projectId, limit })`  | createdAt DESC, id DESC           |
+| Contract              | Method                                                            | Ordering                          |
+| --------------------- | ----------------------------------------------------------------- | --------------------------------- |
+| EvidenceRepository    | `listByProject(...)`, `search(...)`                               | createdAt DESC; rank DESC, id ASC |
+| BlockerRepository     | `listOpen({ tenantId, projectId?, severity?, limit })`            | blockedSince ASC, id ASC          |
+| NoteRepository        | `listRecentByProject({ tenantId, projectId, limit })`             | createdAt DESC, id DESC           |
+| OpportunityRepository | `listPage({ tenantId, status?, source?, query?, limit, after? })` | effective timestamp DESC, id DESC |
 
 Evidence returns full records including summary and details. Blocker reads always
 exclude resolved records. Project and severity filters combine with tenant scope
@@ -171,6 +199,15 @@ predicate. The application signs the cursor and binds it to the trusted tenant a
 a SHA-256 fingerprint of the normalized query and filters. Offset pagination is
 not used. Like other keyset pagination, a stable dataset is required for a stable
 multi-page snapshot; concurrent evidence edits may change rank between calls.
+
+Opportunity pages require trusted tenant scope and a limit from 1 through 100.
+Optional status and source filters are exact; source and query are canonicalized
+by the application before repository access. The cursor position contains the
+effective ordering timestamp at PostgreSQL's six-digit precision and the UUID.
+The application signs it and binds it to the tenant plus normalized status,
+source, and query semantics. M5-A supports no project-type, skill, budget, or
+client-name filter beyond the documented cross-field query, so there are no
+unbound filter semantics.
 
 Tenant and user repositories are deferred because no current use case needs them.
 Lookups return `null` for both nonexistent and cross-tenant identifiers. SQL
@@ -205,7 +242,9 @@ Its generated snapshot is unchanged. Milestone 2 adds
 `packages/database/migrations/0001_project_knowledge.sql`, its generated snapshot,
 and a journal entry. Milestone 4-A adds `0002_evidence_search.sql`, which adds the
 stored generated vector and its GIN index without changing existing evidence
-fields. The Milestone 2 SQL creates the project composite unique constraint
+fields. Milestone 5-A adds `0003_opportunities.sql`, the two opportunity enums,
+the constrained table, and its access-path indexes without modifying existing
+rows. The Milestone 2 SQL creates the project composite unique constraint
 before adding child foreign keys: Drizzle Kit initially emitted that prerequisite
 last, so the new migration's statement order was corrected during review.
 The migration adds no data backfill and preserves existing Milestone 1 rows.
@@ -283,7 +322,10 @@ tables, then runs the complete chain and verifies unchanged rows and schema
 agreement with a fresh database. Knowledge tests cover required fields, enums,
 arrays, same-tenant references, author membership, idempotency, resolution,
 repository ordering/limits/filters, and safe invalid-input failures. No PostgreSQL mocks
-are used.
+are used. Opportunity coverage adds the complete constraint matrix, partial
+external identity uniqueness, pre-M5 upgrade preservation, tenant isolation,
+literal query escaping, all supported filters, deterministic keyset pagination,
+and restricted-role reads.
 
 For this machine, use an assigned host port without touching services on 5432 or 55432. From PowerShell, the public local example credentials can be used as follows:
 

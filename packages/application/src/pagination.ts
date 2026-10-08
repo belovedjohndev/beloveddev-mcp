@@ -13,6 +13,11 @@ export interface EvidenceSearchPosition {
   /** Canonical PostgreSQL real output, used for an exact rank keyset comparison. */
   readonly relevanceScore: string;
 }
+export interface OpportunityPosition {
+  readonly id: string;
+  /** UTC ISO timestamp with six fractional digits, preserving PostgreSQL precision. */
+  readonly orderingTimestamp: string;
+}
 
 export type PageCursor =
   | {
@@ -38,6 +43,13 @@ export type PageCursor =
       readonly tenantId: string;
       readonly queryFingerprint: string;
       readonly position: EvidenceSearchPosition;
+    }
+  | {
+      readonly version: 1;
+      readonly kind: 'opportunities';
+      readonly tenantId: string;
+      readonly filterFingerprint: string;
+      readonly position: OpportunityPosition;
     };
 
 /** Encoding, integrity checks, and structural validation belong to the adapter. */

@@ -1,0 +1,1721 @@
+{
+  "id": "5e5d8947-16c1-40cc-9555-e62d08d5ed16",
+  "prevId": "ec48cdc7-c8d1-4814-94f6-a9a75df1bd19",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.clients": {
+      "name": "clients",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "client_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "notes": {
+          "name": "notes",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "''"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "clients_tenant_id_tenants_id_fk": {
+          "name": "clients_tenant_id_tenants_id_fk",
+          "tableFrom": "clients",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "clients_tenant_id_unique": {
+          "name": "clients_tenant_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "clients_name_nonempty": {
+          "name": "clients_name_nonempty",
+          "value": "length(btrim(\"clients\".\"name\")) > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.developer_profiles": {
+      "name": "developer_profiles",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "headline": {
+          "name": "headline",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "location": {
+          "name": "location",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "years_experience": {
+          "name": "years_experience",
+          "type": "smallint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "hourly_rate": {
+          "name": "hourly_rate",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "availability": {
+          "name": "availability",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "skills": {
+          "name": "skills",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "service_areas": {
+          "name": "service_areas",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "preferred_project_types": {
+          "name": "preferred_project_types",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "excluded_project_types": {
+          "name": "excluded_project_types",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "portfolio_url": {
+          "name": "portfolio_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "github_url": {
+          "name": "github_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "developer_profiles_tenant_id_tenants_id_fk": {
+          "name": "developer_profiles_tenant_id_tenants_id_fk",
+          "tableFrom": "developer_profiles",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "developer_profiles_tenant_unique": {
+          "name": "developer_profiles_tenant_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "developer_profiles_display_name_nonempty": {
+          "name": "developer_profiles_display_name_nonempty",
+          "value": "length(btrim(\"developer_profiles\".\"display_name\")) > 0"
+        },
+        "developer_profiles_years_experience_nonnegative": {
+          "name": "developer_profiles_years_experience_nonnegative",
+          "value": "\"developer_profiles\".\"years_experience\" >= 0"
+        },
+        "developer_profiles_hourly_rate_valid": {
+          "name": "developer_profiles_hourly_rate_valid",
+          "value": "\"developer_profiles\".\"hourly_rate\" BETWEEN 0 AND 9999999999.99"
+        },
+        "developer_profiles_availability_object": {
+          "name": "developer_profiles_availability_object",
+          "value": "jsonb_typeof(\"developer_profiles\".\"availability\") = 'object'"
+        },
+        "developer_profiles_skills_array": {
+          "name": "developer_profiles_skills_array",
+          "value": "\n  jsonb_typeof(\"developer_profiles\".\"skills\") = 'array'\n  AND NOT jsonb_path_exists(\"developer_profiles\".\"skills\", '$[*] ? (@.type() != \"string\")')\n"
+        },
+        "developer_profiles_service_areas_array": {
+          "name": "developer_profiles_service_areas_array",
+          "value": "\n  jsonb_typeof(\"developer_profiles\".\"service_areas\") = 'array'\n  AND NOT jsonb_path_exists(\"developer_profiles\".\"service_areas\", '$[*] ? (@.type() != \"string\")')\n"
+        },
+        "developer_profiles_preferred_project_types_array": {
+          "name": "developer_profiles_preferred_project_types_array",
+          "value": "\n  jsonb_typeof(\"developer_profiles\".\"preferred_project_types\") = 'array'\n  AND NOT jsonb_path_exists(\"developer_profiles\".\"preferred_project_types\", '$[*] ? (@.type() != \"string\")')\n"
+        },
+        "developer_profiles_excluded_project_types_array": {
+          "name": "developer_profiles_excluded_project_types_array",
+          "value": "\n  jsonb_typeof(\"developer_profiles\".\"excluded_project_types\") = 'array'\n  AND NOT jsonb_path_exists(\"developer_profiles\".\"excluded_project_types\", '$[*] ? (@.type() != \"string\")')\n"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.opportunities": {
+      "name": "opportunities",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "source": {
+          "name": "source",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "external_id": {
+          "name": "external_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "client_name": {
+          "name": "client_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_type": {
+          "name": "project_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "budget_type": {
+          "name": "budget_type",
+          "type": "opportunity_budget_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "amount_min": {
+          "name": "amount_min",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "amount_max": {
+          "name": "amount_max",
+          "type": "numeric(12, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "currency": {
+          "name": "currency",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "required_skills": {
+          "name": "required_skills",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "preferred_skills": {
+          "name": "preferred_skills",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "status": {
+          "name": "status",
+          "type": "opportunity_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'new'"
+        },
+        "source_url": {
+          "name": "source_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "published_at": {
+          "name": "published_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "opportunities_tenant_source_external_unique": {
+          "name": "opportunities_tenant_source_external_unique",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "external_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "where": "\"opportunities\".\"external_id\" IS NOT NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "opportunities_tenant_order_idx": {
+          "name": "opportunities_tenant_order_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "coalesce(\"published_at\", \"created_at\") DESC",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "opportunities_tenant_status_idx": {
+          "name": "opportunities_tenant_status_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "opportunities_tenant_source_idx": {
+          "name": "opportunities_tenant_source_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "source",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "opportunities_tenant_id_tenants_id_fk": {
+          "name": "opportunities_tenant_id_tenants_id_fk",
+          "tableFrom": "opportunities",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "opportunities_source_format": {
+          "name": "opportunities_source_format",
+          "value": "length(\"opportunities\".\"source\") <= 100 AND \"opportunities\".\"source\" ~ '^[a-z0-9]+(-[a-z0-9]+)*$'"
+        },
+        "opportunities_external_id_nonblank": {
+          "name": "opportunities_external_id_nonblank",
+          "value": "\"opportunities\".\"external_id\" IS NULL OR \"opportunities\".\"external_id\" ~ '[^[:space:]]'"
+        },
+        "opportunities_title_nonblank": {
+          "name": "opportunities_title_nonblank",
+          "value": "\"opportunities\".\"title\" ~ '[^[:space:]]'"
+        },
+        "opportunities_client_name_nonblank": {
+          "name": "opportunities_client_name_nonblank",
+          "value": "\"opportunities\".\"client_name\" IS NULL OR \"opportunities\".\"client_name\" ~ '[^[:space:]]'"
+        },
+        "opportunities_description_nonblank": {
+          "name": "opportunities_description_nonblank",
+          "value": "\"opportunities\".\"description\" ~ '[^[:space:]]'"
+        },
+        "opportunities_project_type_nonblank": {
+          "name": "opportunities_project_type_nonblank",
+          "value": "\"opportunities\".\"project_type\" IS NULL OR \"opportunities\".\"project_type\" ~ '[^[:space:]]'"
+        },
+        "opportunities_amount_min_valid": {
+          "name": "opportunities_amount_min_valid",
+          "value": "\"opportunities\".\"amount_min\" IS NULL OR \"opportunities\".\"amount_min\" BETWEEN 0 AND 9999999999.99"
+        },
+        "opportunities_amount_max_valid": {
+          "name": "opportunities_amount_max_valid",
+          "value": "\"opportunities\".\"amount_max\" IS NULL OR \"opportunities\".\"amount_max\" BETWEEN 0 AND 9999999999.99"
+        },
+        "opportunities_amounts_ordered": {
+          "name": "opportunities_amounts_ordered",
+          "value": "\"opportunities\".\"amount_min\" IS NULL OR \"opportunities\".\"amount_max\" IS NULL OR \"opportunities\".\"amount_max\" >= \"opportunities\".\"amount_min\""
+        },
+        "opportunities_budget_consistent": {
+          "name": "opportunities_budget_consistent",
+          "value": "(\"opportunities\".\"budget_type\" IS NOT NULL OR (\"opportunities\".\"amount_min\" IS NULL AND \"opportunities\".\"amount_max\" IS NULL))\n        AND ((\"opportunities\".\"amount_min\" IS NULL AND \"opportunities\".\"amount_max\" IS NULL)\n          OR (\"opportunities\".\"budget_type\" IS NOT NULL AND \"opportunities\".\"currency\" IS NOT NULL))"
+        },
+        "opportunities_currency_format": {
+          "name": "opportunities_currency_format",
+          "value": "\"opportunities\".\"currency\" IS NULL OR \"opportunities\".\"currency\" ~ '^[A-Z]{3}$'"
+        },
+        "opportunities_required_skills_array": {
+          "name": "opportunities_required_skills_array",
+          "value": "\n  CASE WHEN jsonb_typeof(\"opportunities\".\"required_skills\") = 'array'\n    THEN NOT jsonb_path_exists(\"opportunities\".\"required_skills\", 'strict $[*] ? (@.type() != \"string\")')\n    ELSE false\n  END\n"
+        },
+        "opportunities_preferred_skills_array": {
+          "name": "opportunities_preferred_skills_array",
+          "value": "\n  CASE WHEN jsonb_typeof(\"opportunities\".\"preferred_skills\") = 'array'\n    THEN NOT jsonb_path_exists(\"opportunities\".\"preferred_skills\", 'strict $[*] ? (@.type() != \"string\")')\n    ELSE false\n  END\n"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.project_blockers": {
+      "name": "project_blockers",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "severity": {
+          "name": "severity",
+          "type": "blocker_severity",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "blocker_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'open'"
+        },
+        "blocked_since": {
+          "name": "blocked_since",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "resolved_at": {
+          "name": "resolved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "project_blockers_tenant_status_blocked_idx": {
+          "name": "project_blockers_tenant_status_blocked_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "blocked_since",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "project_blockers_tenant_project_status_blocked_idx": {
+          "name": "project_blockers_tenant_project_status_blocked_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "blocked_since",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_blockers_tenant_id_tenants_id_fk": {
+          "name": "project_blockers_tenant_id_tenants_id_fk",
+          "tableFrom": "project_blockers",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "project_blockers_tenant_project_fk": {
+          "name": "project_blockers_tenant_project_fk",
+          "tableFrom": "project_blockers",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "tenant_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "project_blockers_title_nonblank": {
+          "name": "project_blockers_title_nonblank",
+          "value": "\"project_blockers\".\"title\" ~ '[^[:space:]]'"
+        },
+        "project_blockers_description_nonblank": {
+          "name": "project_blockers_description_nonblank",
+          "value": "\"project_blockers\".\"description\" ~ '[^[:space:]]'"
+        },
+        "project_blockers_resolution_consistent": {
+          "name": "project_blockers_resolution_consistent",
+          "value": "\n      (\"project_blockers\".\"status\" = 'open' AND \"project_blockers\".\"resolved_at\" IS NULL)\n      OR (\"project_blockers\".\"status\" = 'resolved' AND \"project_blockers\".\"resolved_at\" IS NOT NULL)\n    "
+        },
+        "project_blockers_dates_ordered": {
+          "name": "project_blockers_dates_ordered",
+          "value": "\"project_blockers\".\"resolved_at\" >= \"project_blockers\".\"blocked_since\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.project_evidence": {
+      "name": "project_evidence",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "type": {
+          "name": "type",
+          "type": "evidence_type",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "details": {
+          "name": "details",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "skills": {
+          "name": "skills",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "capabilities": {
+          "name": "capabilities",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "business_outcomes": {
+          "name": "business_outcomes",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "search_vector": {
+          "name": "search_vector",
+          "type": "tsvector",
+          "primaryKey": false,
+          "notNull": true,
+          "generated": {
+            "as": "\n        setweight(to_tsvector('english'::regconfig, coalesce(\"title\", '')), 'A') ||\n        setweight(to_tsvector('english'::regconfig, coalesce(\"summary\", '')), 'B') ||\n        setweight(to_tsvector('english'::regconfig, coalesce(\"details\", '')), 'C') ||\n        setweight(to_tsvector('english'::regconfig,\n          coalesce(\"skills\"::text, '') || ' ' ||\n          coalesce(\"capabilities\"::text, '') || ' ' ||\n          coalesce(\"business_outcomes\"::text, '')\n        ), 'D')\n      ",
+            "type": "stored"
+          }
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "project_evidence_tenant_project_created_idx": {
+          "name": "project_evidence_tenant_project_created_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "project_evidence_search_vector_idx": {
+          "name": "project_evidence_search_vector_idx",
+          "columns": [
+            {
+              "expression": "search_vector",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "gin",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_evidence_tenant_id_tenants_id_fk": {
+          "name": "project_evidence_tenant_id_tenants_id_fk",
+          "tableFrom": "project_evidence",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "project_evidence_tenant_project_fk": {
+          "name": "project_evidence_tenant_project_fk",
+          "tableFrom": "project_evidence",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "tenant_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "project_evidence_title_nonblank": {
+          "name": "project_evidence_title_nonblank",
+          "value": "\"project_evidence\".\"title\" ~ '[^[:space:]]'"
+        },
+        "project_evidence_summary_nonblank": {
+          "name": "project_evidence_summary_nonblank",
+          "value": "\"project_evidence\".\"summary\" ~ '[^[:space:]]'"
+        },
+        "project_evidence_details_nonblank": {
+          "name": "project_evidence_details_nonblank",
+          "value": "\"project_evidence\".\"details\" ~ '[^[:space:]]'"
+        },
+        "project_evidence_skills_array": {
+          "name": "project_evidence_skills_array",
+          "value": "\n  CASE WHEN jsonb_typeof(\"project_evidence\".\"skills\") = 'array'\n    THEN NOT jsonb_path_exists(\"project_evidence\".\"skills\", 'strict $[*] ? (@.type() != \"string\")')\n    ELSE false\n  END\n"
+        },
+        "project_evidence_capabilities_array": {
+          "name": "project_evidence_capabilities_array",
+          "value": "\n  CASE WHEN jsonb_typeof(\"project_evidence\".\"capabilities\") = 'array'\n    THEN NOT jsonb_path_exists(\"project_evidence\".\"capabilities\", 'strict $[*] ? (@.type() != \"string\")')\n    ELSE false\n  END\n"
+        },
+        "project_evidence_business_outcomes_array": {
+          "name": "project_evidence_business_outcomes_array",
+          "value": "\n  CASE WHEN jsonb_typeof(\"project_evidence\".\"business_outcomes\") = 'array'\n    THEN NOT jsonb_path_exists(\"project_evidence\".\"business_outcomes\", 'strict $[*] ? (@.type() != \"string\")')\n    ELSE false\n  END\n"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.project_notes": {
+      "name": "project_notes",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "author_user_id": {
+          "name": "author_user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "category": {
+          "name": "category",
+          "type": "note_category",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "content": {
+          "name": "content",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "idempotency_key": {
+          "name": "idempotency_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "project_notes_tenant_project_created_idx": {
+          "name": "project_notes_tenant_project_created_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "project_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "project_notes_tenant_id_tenants_id_fk": {
+          "name": "project_notes_tenant_id_tenants_id_fk",
+          "tableFrom": "project_notes",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "project_notes_author_user_id_users_id_fk": {
+          "name": "project_notes_author_user_id_users_id_fk",
+          "tableFrom": "project_notes",
+          "tableTo": "users",
+          "columnsFrom": [
+            "author_user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "project_notes_tenant_project_fk": {
+          "name": "project_notes_tenant_project_fk",
+          "tableFrom": "project_notes",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "tenant_id",
+            "project_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "project_notes_tenant_author_fk": {
+          "name": "project_notes_tenant_author_fk",
+          "tableFrom": "project_notes",
+          "tableTo": "tenant_memberships",
+          "columnsFrom": [
+            "tenant_id",
+            "author_user_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "user_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "project_notes_tenant_author_idempotency_unique": {
+          "name": "project_notes_tenant_author_idempotency_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "author_user_id",
+            "idempotency_key"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "project_notes_content_nonblank": {
+          "name": "project_notes_content_nonblank",
+          "value": "\"project_notes\".\"content\" ~ '[^[:space:]]'"
+        },
+        "project_notes_idempotency_key_nonblank": {
+          "name": "project_notes_idempotency_key_nonblank",
+          "value": "\"project_notes\".\"idempotency_key\" ~ '[^[:space:]]'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.projects": {
+      "name": "projects",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "summary": {
+          "name": "summary",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "problem_statement": {
+          "name": "problem_statement",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "project_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'planned'"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "completed_at": {
+          "name": "completed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "stack": {
+          "name": "stack",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "repository_url": {
+          "name": "repository_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "production_url": {
+          "name": "production_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "portfolio_url": {
+          "name": "portfolio_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "projects_tenant_status_idx": {
+          "name": "projects_tenant_status_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "status",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "projects_tenant_id_tenants_id_fk": {
+          "name": "projects_tenant_id_tenants_id_fk",
+          "tableFrom": "projects",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "projects_tenant_client_fk": {
+          "name": "projects_tenant_client_fk",
+          "tableFrom": "projects",
+          "tableTo": "clients",
+          "columnsFrom": [
+            "tenant_id",
+            "client_id"
+          ],
+          "columnsTo": [
+            "tenant_id",
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "projects_tenant_id_unique": {
+          "name": "projects_tenant_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "id"
+          ]
+        },
+        "projects_tenant_slug_unique": {
+          "name": "projects_tenant_slug_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "slug"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "projects_name_nonempty": {
+          "name": "projects_name_nonempty",
+          "value": "length(btrim(\"projects\".\"name\")) > 0"
+        },
+        "projects_slug_format": {
+          "name": "projects_slug_format",
+          "value": "\"projects\".\"slug\" ~ '^[a-z0-9]+(-[a-z0-9]+)*$'"
+        },
+        "projects_stack_array": {
+          "name": "projects_stack_array",
+          "value": "\n  jsonb_typeof(\"projects\".\"stack\") = 'array'\n  AND NOT jsonb_path_exists(\"projects\".\"stack\", '$[*] ? (@.type() != \"string\")')\n"
+        },
+        "projects_dates_ordered": {
+          "name": "projects_dates_ordered",
+          "value": "\"projects\".\"completed_at\" IS NULL OR \"projects\".\"started_at\" IS NULL OR \"projects\".\"completed_at\" >= \"projects\".\"started_at\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.tenant_memberships": {
+      "name": "tenant_memberships",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role": {
+          "name": "role",
+          "type": "membership_role",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "record_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "tenant_memberships_tenant_id_tenants_id_fk": {
+          "name": "tenant_memberships_tenant_id_tenants_id_fk",
+          "tableFrom": "tenant_memberships",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "tenant_memberships_user_id_users_id_fk": {
+          "name": "tenant_memberships_user_id_users_id_fk",
+          "tableFrom": "tenant_memberships",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "tenant_memberships_tenant_user_unique": {
+          "name": "tenant_memberships_tenant_user_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "tenant_id",
+            "user_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.tenants": {
+      "name": "tenants",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slug": {
+          "name": "slug",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "record_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "tenants_slug_unique": {
+          "name": "tenants_slug_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "slug"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "tenants_name_nonempty": {
+          "name": "tenants_name_nonempty",
+          "value": "length(btrim(\"tenants\".\"name\")) > 0"
+        },
+        "tenants_slug_format": {
+          "name": "tenants_slug_format",
+          "value": "\"tenants\".\"slug\" ~ '^[a-z0-9]+(-[a-z0-9]+)*$'"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.users": {
+      "name": "users",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "record_status",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'active'"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "users_email_unique": {
+          "name": "users_email_unique",
+          "columns": [
+            {
+              "expression": "lower(\"email\")",
+              "asc": true,
+              "isExpression": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "users_email_trimmed": {
+          "name": "users_email_trimmed",
+          "value": "\"users\".\"email\" = btrim(\"users\".\"email\") AND length(\"users\".\"email\") > 0"
+        },
+        "users_display_name_nonempty": {
+          "name": "users_display_name_nonempty",
+          "value": "length(btrim(\"users\".\"display_name\")) > 0"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {
+    "public.blocker_severity": {
+      "name": "blocker_severity",
+      "schema": "public",
+      "values": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "public.blocker_status": {
+      "name": "blocker_status",
+      "schema": "public",
+      "values": [
+        "open",
+        "resolved"
+      ]
+    },
+    "public.client_status": {
+      "name": "client_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "archived"
+      ]
+    },
+    "public.evidence_type": {
+      "name": "evidence_type",
+      "schema": "public",
+      "values": [
+        "feature",
+        "architecture",
+        "integration",
+        "business_outcome",
+        "performance",
+        "security",
+        "reliability",
+        "automation",
+        "client_result"
+      ]
+    },
+    "public.membership_role": {
+      "name": "membership_role",
+      "schema": "public",
+      "values": [
+        "owner",
+        "member",
+        "viewer"
+      ]
+    },
+    "public.note_category": {
+      "name": "note_category",
+      "schema": "public",
+      "values": [
+        "general",
+        "decision",
+        "requirement",
+        "client_feedback",
+        "technical",
+        "follow_up",
+        "research"
+      ]
+    },
+    "public.opportunity_budget_type": {
+      "name": "opportunity_budget_type",
+      "schema": "public",
+      "values": [
+        "fixed",
+        "hourly"
+      ]
+    },
+    "public.opportunity_status": {
+      "name": "opportunity_status",
+      "schema": "public",
+      "values": [
+        "new",
+        "reviewing",
+        "shortlisted",
+        "applied",
+        "rejected",
+        "won",
+        "lost",
+        "archived"
+      ]
+    },
+    "public.project_status": {
+      "name": "project_status",
+      "schema": "public",
+      "values": [
+        "planned",
+        "active",
+        "paused",
+        "completed",
+        "archived"
+      ]
+    },
+    "public.record_status": {
+      "name": "record_status",
+      "schema": "public",
+      "values": [
+        "active",
+        "inactive"
+      ]
+    }
+  },
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

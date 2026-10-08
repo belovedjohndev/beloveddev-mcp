@@ -19,6 +19,10 @@
     "./read-fixtures": {
       "types": "./dist/read-fixtures.d.ts",
       "import": "./dist/read-fixtures.js"
+    },
+    "./opportunity-fixtures": {
+      "types": "./dist/opportunity-fixtures.d.ts",
+      "import": "./dist/opportunity-fixtures.js"
     }
   },
   "dependencies": {

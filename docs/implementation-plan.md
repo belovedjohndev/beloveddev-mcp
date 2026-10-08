@@ -304,15 +304,30 @@ return relevant structured project evidence.
 
 ## 7. Milestone 5 — Opportunities
 
+Milestone 5 is split at the application/interface boundary.
+
+### Milestone 5-A — PostgreSQL and application listing
+
+Implemented in this slice:
+
+- tenant-owned opportunity table and additive migration
+- constrained source, status, budget, currency, and strict skill arrays
+- partial external identity uniqueness
+- `OpportunityRepository.listPage`
+- exact status/source filters and literal cross-field query
+- deterministic effective-timestamp/UUID keyset pagination
+- signed cursors bound to tenant and every supported normalized filter
+- `ListOpportunities` with `opportunities:read` authorization
+- application and real PostgreSQL tests
+
+M5-A does not register an MCP tool or wire this use case into the stdio
+composition root.
+
+### Milestone 5-B — MCP exposure
+
 ### Goal
 
-Represent freelance opportunities without external integrations.
-
-### Table
-
-```text
-opportunities
-```
+Expose the implemented read-only opportunity listing through MCP.
 
 ### Tool
 
@@ -322,17 +337,16 @@ list_opportunities
 
 ### Deliverables
 
-- schema and migration
-- repository
-- filters
-- cursor pagination
-- tenant isolation
-- representative fixtures
+- MCP input and output schemas
+- explicit tool registration
+- composition-root wiring
 - MCP contract tests
+- stdio/PostgreSQL smoke coverage
 
 ### Exit Criteria
 
-Stored opportunities can be listed reliably and safely.
+An MCP client can list stored opportunities reliably and safely through the
+existing trusted-context and shared invocation boundary.
 
 No Upwork/Gmail/browser synchronization is included yet.
 

@@ -32,7 +32,7 @@ describe('operator-configured local request context', () => {
         requestId: fixtureId(4),
         membershipId: membership.id,
         role,
-        permissions: ['profile:read', 'projects:read'],
+        permissions: ['profile:read', 'projects:read', 'opportunities:read'],
       });
       expect(Object.isFrozen(result)).toBe(true);
     },

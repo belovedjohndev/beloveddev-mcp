@@ -47,6 +47,10 @@
     "./use-cases/search-project-evidence": {
       "types": "./dist/use-cases/search-project-evidence.d.ts",
       "import": "./dist/use-cases/search-project-evidence.js"
+    },
+    "./use-cases/list-opportunities": {
+      "types": "./dist/use-cases/list-opportunities.d.ts",
+      "import": "./dist/use-cases/list-opportunities.js"
     }
   },
   "dependencies": {

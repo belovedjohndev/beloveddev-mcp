@@ -30,7 +30,11 @@ describe('read use cases without MCP', () => {
   it.each(['owner', 'member', 'viewer'] as const)(
     '%s has exactly the implemented read permissions',
     (role) => {
-      expect(permissionsForRole(role)).toEqual(['profile:read', 'projects:read']);
+      expect(permissionsForRole(role)).toEqual([
+        'profile:read',
+        'projects:read',
+        'opportunities:read',
+      ]);
       expect(Object.isFrozen(permissionsForRole(role))).toBe(true);
     },
   );

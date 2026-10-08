@@ -5,14 +5,16 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 4
+## Current status: Milestone 5-A
 
 The stdio MCP server exposes five read-only tools backed by tenant-scoped
 PostgreSQL repositories: `get_profile`, `list_projects`, `get_project`,
 `search_project_evidence`, and `get_blockers`. Project evidence search uses a
 stored weighted English `tsvector`, deterministic PostgreSQL relevance ranking,
 structured filters, and signed keyset cursors. Opportunity workflows and
-mutations remain later milestones.
+mutations remain later milestones. The tenant-scoped opportunity schema,
+PostgreSQL repository, and authorized `ListOpportunities` application use case
+are implemented, but `list_opportunities` is not registered as an MCP tool yet.
 
 ## Requirements
 
@@ -147,7 +149,7 @@ Changing initialization credentials does not update an existing database volume.
 Repositories require trusted tenant scope in SQL. The local request-context
 adapter rechecks active tenant, user, and membership state on every invocation;
 MCP arguments cannot establish identity or choose a tenant. Read use cases enforce
-`profile:read` or `projects:read` before protected repository access. Foreign
+`profile:read`, `projects:read`, or `opportunities:read` before protected repository access. Foreign
 project filters return no search results. Composite foreign keys enforce project
 ownership. Local mode is intentionally unavailable in production until a
 production identity provider is implemented.
@@ -171,8 +173,9 @@ constraints, cleanup behavior, and Drizzle compatibility notes.
 - [Implementation plan](docs/implementation-plan.md)
 - [Agent instructions](AGENTS.md)
 
-Five of the eight planned V1 tools are implemented. Opportunities, deterministic
-opportunity evaluation, and the audited idempotent note mutation remain planned.
+Five of the eight planned V1 tools are implemented. Opportunity listing is ready
+at the database and application layers; MCP exposure, deterministic opportunity
+evaluation, and the audited idempotent note mutation remain planned.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
 [PostgreSQL image initialization and storage](https://hub.docker.com/_/postgres),

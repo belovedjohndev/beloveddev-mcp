@@ -2,11 +2,24 @@ export const recordStatuses = ['active', 'inactive'] as const;
 export const membershipRoles = ['owner', 'member', 'viewer'] as const;
 export const clientStatuses = ['active', 'archived'] as const;
 export const projectStatuses = ['planned', 'active', 'paused', 'completed', 'archived'] as const;
+export const opportunityStatuses = [
+  'new',
+  'reviewing',
+  'shortlisted',
+  'applied',
+  'rejected',
+  'won',
+  'lost',
+  'archived',
+] as const;
+export const opportunityBudgetTypes = ['fixed', 'hourly'] as const;
 
 export type RecordStatus = (typeof recordStatuses)[number];
 export type MembershipRole = (typeof membershipRoles)[number];
 export type ClientStatus = (typeof clientStatuses)[number];
 export type ProjectStatus = (typeof projectStatuses)[number];
+export type OpportunityStatus = (typeof opportunityStatuses)[number];
+export type OpportunityBudgetType = (typeof opportunityBudgetTypes)[number];
 
 export type JsonValue =
   string | number | boolean | null | readonly JsonValue[] | { readonly [key: string]: JsonValue };
@@ -155,4 +168,28 @@ export interface ProjectNote {
   readonly content: string;
   readonly idempotencyKey: string;
   readonly createdAt: Date;
+}
+
+export interface Opportunity {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly source: string;
+  readonly externalId: string | null;
+  readonly title: string;
+  readonly clientName: string | null;
+  readonly description: string;
+  readonly projectType: string | null;
+  readonly budgetType: OpportunityBudgetType | null;
+  /** Exact decimal amount in currency units; meaning is determined by budgetType. */
+  readonly amountMin: string | null;
+  /** Exact decimal amount in currency units; meaning is determined by budgetType. */
+  readonly amountMax: string | null;
+  readonly currency: string | null;
+  readonly requiredSkills: readonly string[];
+  readonly preferredSkills: readonly string[];
+  readonly status: OpportunityStatus;
+  readonly sourceUrl: string | null;
+  readonly publishedAt: Date | null;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
 }
