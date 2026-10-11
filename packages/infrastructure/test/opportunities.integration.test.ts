@@ -29,6 +29,30 @@ describe('PostgresOpportunityRepository', () => {
     await database?.close();
   });
 
+  it('gets an opportunity only through the trusted tenant scope', async () => {
+    const own = await seedOpportunity(database.admin.db, tenants.a.tenantId, {
+      id: fixtureId(99),
+    });
+    expect(
+      await repository.getById({ tenantId: tenants.a.tenantId, opportunityId: own.id }),
+    ).toEqual(own);
+    expect(
+      await repository.getById({ tenantId: tenants.b.tenantId, opportunityId: own.id }),
+    ).toBeNull();
+    expect(
+      await repository.getById({ tenantId: tenants.a.tenantId, opportunityId: fixtureId(999) }),
+    ).toBeNull();
+  });
+
+  it('rejects malformed getById identifiers before issuing SQL', async () => {
+    await expect(
+      repository.getById({ tenantId: tenants.a.tenantId, opportunityId: 'invalid' }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expect(
+      repository.getById({ tenantId: 'invalid', opportunityId: fixtureId(99) }),
+    ).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  });
+
   it('isolates every page by the trusted tenant scope', async () => {
     const tenantA = await seedOpportunity(database.admin.db, tenants.a.tenantId, {
       id: fixtureId(100),
@@ -179,7 +203,13 @@ describe('PostgresOpportunityRepository', () => {
   });
 
   it('uses the restricted runtime role for reads without granting writes', async () => {
-    await seedOpportunity(database.admin.db, tenants.a.tenantId);
+    const opportunity = await seedOpportunity(database.admin.db, tenants.a.tenantId);
+    expect(
+      await repository.getById({
+        tenantId: tenants.a.tenantId,
+        opportunityId: opportunity.id,
+      }),
+    ).toEqual(opportunity);
     const page = await repository.listPage({ tenantId: tenants.a.tenantId, limit: 20 });
     expect(page.items).toHaveLength(1);
     await expect(database.runtime.pool.query('DELETE FROM opportunities')).rejects.toMatchObject({

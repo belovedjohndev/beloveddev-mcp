@@ -7,7 +7,7 @@ import { listOpportunitiesInput, parseReadInput } from '../read-inputs.js';
 
 export class ListOpportunities {
   constructor(
-    private readonly opportunities: OpportunityRepository,
+    private readonly opportunities: Pick<OpportunityRepository, 'listPage'>,
     private readonly authorization: AuthorizationPolicy,
     private readonly cursors: CursorCodec,
   ) {}

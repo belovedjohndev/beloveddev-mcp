@@ -361,13 +361,22 @@ No Upwork/Gmail/browser synchronization is included yet.
 
 ### Goal
 
-Evaluate opportunities using code-controlled rules and portfolio evidence.
+Evaluate opportunities using code-controlled rules and portfolio evidence, then
+expose that application capability through MCP in a separate slice.
 
-### Tool
+### Milestone 6-A — domain/application evaluation
 
-```text
-evaluate_opportunity
-```
+Implemented:
+
+- tenant-scoped `OpportunityRepository.getById`
+- owner/member `opportunities:evaluate` authorization with viewer denial
+- pure, versioned `EvaluationPolicyV1`
+- fixed skill, project-type, and experience-evidence scoring
+- nullable budget scoring while profile rate currency is unavailable
+- existing tenant-scoped evidence search reused with a limit of 10
+- structured strengths, concerns, and risk flags
+- deterministic recommendation thresholds and overrides
+- application orchestration with no persistence or side effects
 
 ### Inputs
 
@@ -410,7 +419,7 @@ At minimum:
 excellent fit
 partial skill gap
 excluded project type
-budget mismatch
+budget not comparable without profile currency
 strong project evidence
 weak/no project evidence
 cross-tenant opportunity
@@ -420,6 +429,25 @@ missing developer profile
 ### Exit Criteria
 
 Given the same stored data and evaluation version, the result is deterministic.
+
+Milestone 6-A is complete. Domain tests lock the weights, thresholds, overrides,
+findings, and evidence ranking. Application tests cover strict input,
+authorization order, trusted tenant scope, safe errors, and missing resources.
+Real PostgreSQL tests cover scoped opportunity lookup, bounded full-text evidence
+search, cross-tenant isolation, deterministic end-to-end evaluation, and the
+absence of database writes.
+
+### Milestone 6-B — MCP exposure
+
+Planned tool:
+
+```text
+evaluate_opportunity
+```
+
+Milestone 6-B will add the strict MCP schema, explicit registration,
+composition-root wiring, contract tests, invocation logging coverage, and stdio
+integration. No MCP exposure is part of 6-A.
 
 ---
 

@@ -505,6 +505,98 @@ weak_match
 skip
 ```
 
+### EvaluationPolicyV1
+
+Milestone 6-A implements a pure policy with `evaluationVersion = "v1"`.
+Skill and project-type comparisons apply Unicode NFKC normalization, trim,
+collapse internal whitespace, and lowercase. Matching is exact after
+normalization, with no aliases or fuzzy matching. Collections are deduplicated;
+required skills take precedence when the same skill is also preferred.
+
+Component scores use `Math.round` to produce integers from 0 through 100.
+Required skill coverage contributes 80% and preferred coverage contributes 20%
+when both groups exist. A sole group supplies the full score; no requested skills
+produce `null`. `matchedSkills` contains normalized required and preferred
+matches, while `missingSkills` contains missing required skills only.
+
+Project type is an exact normalized comparison. Excluded is 0, preferred is
+100, and a specified type outside a non-empty preference list is 50. All other
+cases are `null`; exclusion wins if profile lists conflict.
+
+Overall scoring uses these weights:
+
+| Dimension           | Weight |
+| ------------------- | -----: |
+| Skills              |     45 |
+| Project type        |     20 |
+| Budget              |     15 |
+| Experience evidence |     20 |
+
+Null dimensions are omitted from both numerator and denominator. The weighted
+result uses `Math.round`. When every dimension is null, the result is score 50,
+recommendation `review`, and risk `insufficient_evaluation_signals`.
+
+Budget score is always `null` in v1. `DeveloperProfile.hourlyRate` has no
+currency, so comparing it with an opportunity amount would invent currency
+semantics. A present minimum or maximum amount emits the deterministic
+`budget_not_comparable` concern. Future currency-aware behavior requires a new
+evaluation-policy version.
+
+Evaluation reuses tenant-scoped PostgreSQL full-text evidence search. The query
+is quoted normalized required skills followed by preferred skills joined with
+`OR`; if skills are absent it uses project type, then title. Retrieval and output
+are capped at 10 in repository search order. PostgreSQL `ts_rank_cd` remains
+retrieval metadata. Evidence score uses the union of structured
+`ProjectEvidence.skills` and the same 80/20 coverage formula. No requested skills
+produce a null evidence score; requested skills with no demonstrated evidence
+produce 0. Evidence scores of 80 or higher emit `strong_portfolio_evidence`;
+positive lower scores emit `limited_portfolio_evidence`.
+
+Generated search queries are bounded to the existing 1000 UTF-16-code-unit
+repository limit, including quotes and ` OR ` separators. Normalized required
+skills are considered first, followed by preferred skills in stored order.
+Complete terms that fit are included; terms that do not fit are omitted, and
+later fitting terms may still be included. Skill terms are never cut into
+different skill names. Embedded double quotes are replaced with whitespace so
+each included term remains a closed websearch phrase. Long fallback project
+types/titles use a prefix of at most 998 code units, without splitting a Unicode
+surrogate pair, enclosed in quotes. If no nonempty complete skill phrase fits,
+search is skipped and the evaluation has no retrieved evidence.
+
+Omitted terms, shortened/quote-adjusted text, skipped searches, or a repository
+continuation beyond the ten-record page emit `evidence_retrieval_incomplete`.
+Evidence scores still measure only the returned structured skills using the
+unchanged formula. They are observed coverage, not a claim about all tenant
+evidence. Incomplete retrieval suppresses `no_portfolio_evidence`, even when
+observed coverage is zero. The flag adds no recommendation penalty or scoring
+override.
+
+Base recommendations use these inclusive thresholds:
+
+| Minimum score | Recommendation |
+| ------------- | -------------- |
+| 85            | `strong_match` |
+| 70            | `good_match`   |
+| 55            | `review`       |
+| 40            | `weak_match`   |
+| 0             | `skip`         |
+
+Overrides are applied in order: an excluded project type forces `skip`; required
+coverage of zero forces `skip`; and required coverage below 50% caps the result
+at `weak_match`. No other penalties are applied. Strengths, concerns, and risk
+flags are deterministic `code`/`message` objects using the documented initial
+code set.
+
+```text
+strengths: all_required_skills_matched, preferred_project_type,
+           strong_portfolio_evidence
+concerns:  missing_required_skills, project_type_not_preferred,
+           limited_portfolio_evidence, budget_not_comparable
+risks:     excluded_project_type, no_required_skills_matched,
+           no_portfolio_evidence, insufficient_evaluation_signals,
+           evidence_retrieval_incomplete
+```
+
 ### Design Decision
 
 Do not persist evaluations in V1.

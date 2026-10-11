@@ -27,17 +27,14 @@ describe('read use cases without MCP', () => {
     codec = { encode: vi.fn(() => 'opaque-next-page'), decode: vi.fn(() => decoded) };
   });
 
-  it.each(['owner', 'member', 'viewer'] as const)(
-    '%s has exactly the implemented read permissions',
-    (role) => {
-      expect(permissionsForRole(role)).toEqual([
-        'profile:read',
-        'projects:read',
-        'opportunities:read',
-      ]);
-      expect(Object.isFrozen(permissionsForRole(role))).toBe(true);
-    },
-  );
+  it.each([
+    ['owner', ['profile:read', 'projects:read', 'opportunities:read', 'opportunities:evaluate']],
+    ['member', ['profile:read', 'projects:read', 'opportunities:read', 'opportunities:evaluate']],
+    ['viewer', ['profile:read', 'projects:read', 'opportunities:read']],
+  ] as const)('%s has exactly the implemented permissions', (role, permissions) => {
+    expect(permissionsForRole(role)).toEqual(permissions);
+    expect(Object.isFrozen(permissionsForRole(role))).toBe(true);
+  });
 
   it.each(['profile', 'projects', 'project', 'blockers'] as const)(
     '%s denies missing/unauthorized context before repository work',

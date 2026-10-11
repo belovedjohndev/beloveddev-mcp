@@ -7,6 +7,10 @@
     "./entities": {
       "types": "./dist/entities.d.ts",
       "default": "./dist/entities.js"
+    },
+    "./evaluation-policy-v1": {
+      "types": "./dist/evaluation-policy-v1.d.ts",
+      "default": "./dist/evaluation-policy-v1.js"
     }
   }
 }

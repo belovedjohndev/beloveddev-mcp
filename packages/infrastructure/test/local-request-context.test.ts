@@ -19,9 +19,13 @@ describe('operator-configured local request context', () => {
     ).toBeNull();
     expect(getActiveByUser).not.toHaveBeenCalled();
   });
-  it.each(['owner', 'member', 'viewer'] as const)(
-    'resolves %s from active membership, with read permissions',
-    async (role) => {
+  it.each([
+    ['owner', ['profile:read', 'projects:read', 'opportunities:read', 'opportunities:evaluate']],
+    ['member', ['profile:read', 'projects:read', 'opportunities:read', 'opportunities:evaluate']],
+    ['viewer', ['profile:read', 'projects:read', 'opportunities:read']],
+  ] as const)(
+    'resolves %s from active membership with role-derived permissions',
+    async (role, permissions) => {
       const getActiveByUser = vi.fn(() => Promise.resolve({ ...membership, role }));
       const result = await new LocalRequestContextProvider(principal, { getActiveByUser }).resolve(
         fixtureId(4),
@@ -32,7 +36,7 @@ describe('operator-configured local request context', () => {
         requestId: fixtureId(4),
         membershipId: membership.id,
         role,
-        permissions: ['profile:read', 'projects:read', 'opportunities:read'],
+        permissions,
       });
       expect(Object.isFrozen(result)).toBe(true);
     },

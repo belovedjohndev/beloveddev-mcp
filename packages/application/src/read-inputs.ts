@@ -46,6 +46,7 @@ export const listOpportunitiesInput = z.strictObject({
   limit,
   cursor,
 });
+export const evaluateOpportunityInput = z.strictObject({ opportunityId: z.uuid() });
 
 export function parseReadInput<T>(schema: z.ZodType<T>, input: unknown): T {
   const result = schema.safeParse(input);

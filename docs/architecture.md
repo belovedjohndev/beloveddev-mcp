@@ -1,16 +1,17 @@
 # BelovedDev MCP V1 — Architecture
 
-## Implemented architecture through Milestone 5-A
+## Implemented architecture through Milestone 6-A
 
 The stdio executable composes trusted local request context, application use
 cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
 logging. Database setup remains an explicit migration CLI action.
 
-The domain package defines portable records and status values; the application
-package defines explicit ports and authorized use cases. Infrastructure implements
-the ports with tenant predicates in Drizzle queries. The database package owns
-schema, migrations, and pool lifecycle. Core packages do not depend on persistence
-or transport. The shared package remains metadata-only.
+The domain package defines portable records, status values, and the pure
+`EvaluationPolicyV1`; the application package defines explicit ports and
+authorized use cases. Infrastructure implements the ports with tenant predicates
+in Drizzle queries. The database package owns schema, migrations, and pool
+lifecycle. Core packages do not depend on persistence or transport. The shared
+package remains metadata-only.
 
 Missing and cross-tenant lookups return null; knowledge listings return empty arrays. Repository errors expose safe
 categories without raw SQL causes. Project creation is one atomic INSERT with a
@@ -545,7 +546,8 @@ structured logger.
 
 ## 15. Opportunity Evaluation Architecture
 
-Opportunity evaluation is an application/domain operation.
+Milestone 6-A implements opportunity evaluation as an application/domain
+operation. It is not registered with MCP until Milestone 6-B.
 
 It may use:
 
@@ -553,29 +555,55 @@ It may use:
 DeveloperProfile
 Opportunity
 ProjectEvidence
-EvaluationPolicy v1
+EvaluationPolicyV1
 ```
 
-Possible deterministic signals:
+`EvaluateOpportunity` requires `opportunities:evaluate`, which is granted to
+owner and member roles and withheld from viewers. It validates only an
+`opportunityId`; tenant and identity always come from trusted context. The
+application loads the opportunity through `getById({ tenantId, opportunityId })`,
+then the profile, then at most 10 tenant-scoped evidence search results. Foreign and
+unknown opportunity IDs are indistinguishable `NOT_FOUND` results.
+
+The pure policy owns these deterministic signals:
 
 ```text
 skill match
 project-type match
-budget compatibility
+nullable budget compatibility
 evidence strength
 excluded-project penalties
 risk flags
 ```
 
-Output must include:
+The policy owns fixed v1 weights, recommendation thresholds, overrides,
+structured findings, evidence relevance, and:
 
 ```text
 evaluationVersion = "v1"
 ```
 
-The MCP handler does not calculate scores.
+Normalization is NFKC, trimmed, whitespace-collapsed, and lowercase. The
+application builds a quoted `OR` query from normalized required then preferred
+skills, falling back to project type and then opportunity title. It reuses the
+existing PostgreSQL full-text search port with trusted tenant scope and a limit
+of 10. Search rank controls retrieval order only; the policy scores experience
+coverage from the returned structured evidence skill arrays.
 
-The evaluation is read-only and not persisted in V1.
+The query builder enforces the existing 1000-character search contract with
+required-first complete skill phrases and bounded fallback text. It passes query
+truncation and page-continuation information into the pure policy. The result
+flags `evidence_retrieval_incomplete` and suppresses claims of absent evidence
+when retrieval is partial; scoring weights and recommendation overrides remain
+unchanged. See the domain model for the exact bounded-query strategy.
+
+The overall weights are skills 45, project type 20, budget 15, and evidence 20.
+Null dimensions are removed from numerator and denominator. Because profile rate
+currency is not modeled, the v1 budget score is always null. Thresholds and only
+the three specified recommendation overrides live in the versioned policy.
+
+Evaluation is read-only and not persisted. No evaluation table, transaction,
+mutation, audit row, LLM call, embedding, or vector query is involved.
 
 ## 16. Logging
 

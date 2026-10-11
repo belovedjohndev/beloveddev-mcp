@@ -51,6 +51,10 @@
     "./use-cases/list-opportunities": {
       "types": "./dist/use-cases/list-opportunities.d.ts",
       "import": "./dist/use-cases/list-opportunities.js"
+    },
+    "./use-cases/evaluate-opportunity": {
+      "types": "./dist/use-cases/evaluate-opportunity.d.ts",
+      "import": "./dist/use-cases/evaluate-opportunity.js"
     }
   },
   "dependencies": {

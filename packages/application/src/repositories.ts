@@ -145,5 +145,6 @@ export interface OpportunityPage {
   readonly nextPosition: OpportunityPosition | null;
 }
 export interface OpportunityRepository {
+  getById(input: { tenantId: string; opportunityId: string }): Promise<Opportunity | null>;
   listPage(input: OpportunityListQuery): Promise<OpportunityPage>;
 }

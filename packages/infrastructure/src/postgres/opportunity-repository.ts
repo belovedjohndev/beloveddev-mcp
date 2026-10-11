@@ -28,9 +28,31 @@ const listQuerySchema = z.strictObject({
     })
     .optional(),
 });
+const getByIdQuerySchema = z.strictObject({
+  tenantId: z.uuid(),
+  opportunityId: z.uuid(),
+});
 
 export class PostgresOpportunityRepository implements OpportunityRepository {
   constructor(private readonly database: RepositoryDatabase) {}
+
+  async getById(input: Parameters<OpportunityRepository['getById']>[0]) {
+    const parsed = getByIdQuerySchema.safeParse(input);
+    if (!parsed.success) throw new RepositoryError('INVALID_INPUT');
+    return repositoryQuery(async () => {
+      const [opportunity] = await this.database
+        .select()
+        .from(opportunities)
+        .where(
+          and(
+            eq(opportunities.tenantId, parsed.data.tenantId),
+            eq(opportunities.id, parsed.data.opportunityId),
+          ),
+        )
+        .limit(1);
+      return opportunity ?? null;
+    });
+  }
 
   async listPage(input: OpportunityListQuery) {
     const parsed = listQuerySchema.safeParse(input);

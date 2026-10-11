@@ -565,15 +565,21 @@ fit
 scores
   skills
   projectType
-  budget
+  budget (nullable)
   experienceEvidence
 
 matchedSkills[]
 missingSkills[]
 
 strengths[]
+  code
+  message
 concerns[]
+  code
+  message
 riskFlags[]
+  code
+  message
 
 relevantEvidence[]
   projectId
@@ -637,6 +643,24 @@ Initial version:
 ```text
 evaluationVersion = "v1"
 ```
+
+Milestone 6-A implements this deterministic application result. Values use NFKC,
+trimmed, whitespace-collapsed, lowercase exact matching. Skills, project type,
+budget, and evidence have weights 45/20/15/20; null dimensions are removed from
+both numerator and denominator. Budget is `null` because the developer profile
+rate has no currency.
+
+Evidence retrieval reuses tenant-scoped full-text search with quoted OR terms and
+a limit of 10. Generated queries stay within 1000 characters, prioritize complete
+required skill phrases over preferred phrases, and bound fallback project-type
+or title text. Omitted/shortened terms or a page continuation emit
+`evidence_retrieval_incomplete`; partial retrieval cannot emit
+`no_portfolio_evidence`. Evidence scores describe observed retrieved coverage.
+Search rank is returned as retrieval metadata; structured evidence
+skills determine evidence coverage. Base recommendation thresholds are 85, 70,
+55, and 40. Only excluded project type, zero required coverage, and below-half
+required coverage override the base recommendation. MCP registration, transport
+schemas, and composition-root wiring remain Milestone 6-B.
 
 ## Persistence
 
