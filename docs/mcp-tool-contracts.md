@@ -538,6 +538,10 @@ Structured request log only.
 
 # 10. `evaluate_opportunity`
 
+Implemented through Milestone 6-B. Input and every output object are strict;
+the only input is the required UUID `opportunityId`. Unknown identity, tenant,
+profile, and scoring configuration fields are SDK-rejected before use-case work.
+
 ## Purpose
 
 Evaluate one stored opportunity against the authenticated tenant's developer profile and available project evidence.
@@ -659,8 +663,12 @@ or title text. Omitted/shortened terms or a page continuation emit
 Search rank is returned as retrieval metadata; structured evidence
 skills determine evidence coverage. Base recommendation thresholds are 85, 70,
 55, and 40. Only excluded project type, zero required coverage, and below-half
-required coverage override the base recommendation. MCP registration, transport
-schemas, and composition-root wiring remain Milestone 6-B.
+required coverage override the base recommendation. Milestone 6-B registers the
+tool explicitly with these existing semantics and the shared invocation boundary.
+Only owner and member roles receive `opportunities:evaluate`; viewers are denied.
+Success returns JSON text content and matching `structuredContent`, with a
+generated `meta.requestId`. Application failures return `isError: true` and safe
+JSON error text with a request ID, without success `structuredContent`.
 
 ## Persistence
 
@@ -670,7 +678,7 @@ Do not persist evaluation results in V1.
 
 - opportunity missing → `NOT_FOUND`
 - cross-tenant opportunity → `NOT_FOUND`
-- developer profile missing → `NOT_FOUND` or a specific safe application error mapped consistently
+- developer profile missing → `NOT_FOUND`
 - malformed opportunity data that violates evaluation assumptions → safe `INTERNAL_ERROR` plus diagnostic logging, unless it is a user-correctable validation condition
 - infrastructure failure → `INTERNAL_ERROR`
 

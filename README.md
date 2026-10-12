@@ -5,16 +5,20 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 5-B
+## Current status: Milestone 6-B
 
-The stdio MCP server exposes six read-only tools backed by tenant-scoped
+The stdio MCP server exposes seven read-only tools backed by tenant-scoped
 PostgreSQL repositories: `get_profile`, `list_projects`, `get_project`,
-`search_project_evidence`, `get_blockers`, and `list_opportunities`. Project
+`search_project_evidence`, `get_blockers`, `list_opportunities`, and
+`evaluate_opportunity`. Project
 evidence search uses a stored weighted English `tsvector`, deterministic
 PostgreSQL relevance ranking, structured filters, and signed keyset cursors.
 Opportunity listing uses exact structured filters, a literal cross-field query,
-and signed deterministic keyset pagination. Evaluation and mutations remain
-later milestones.
+and signed deterministic keyset pagination. Opportunity evaluation reuses the
+versioned domain policy and bounded evidence search; budget compatibility remains
+null because profile currency is not modeled. Owners and members can evaluate;
+viewers can list opportunities. Evaluation is derived and read-only. The audited
+note mutation remains a later milestone.
 
 ## Requirements
 
@@ -149,7 +153,9 @@ Changing initialization credentials does not update an existing database volume.
 Repositories require trusted tenant scope in SQL. The local request-context
 adapter rechecks active tenant, user, and membership state on every invocation;
 MCP arguments cannot establish identity or choose a tenant. Read use cases enforce
-`profile:read`, `projects:read`, or `opportunities:read` before protected repository access. Foreign
+`profile:read`, `projects:read`, `opportunities:read`, or
+`opportunities:evaluate` before protected repository access. Evaluation permits
+owners and members and denies viewers. Foreign opportunity IDs return `NOT_FOUND`. Foreign
 project filters return no search results. Composite foreign keys enforce project
 ownership. Local mode is intentionally unavailable in production until a
 production identity provider is implemented.
@@ -173,8 +179,8 @@ constraints, cleanup behavior, and Drizzle compatibility notes.
 - [Implementation plan](docs/implementation-plan.md)
 - [Agent instructions](AGENTS.md)
 
-Six of the eight planned V1 tools are implemented. Deterministic opportunity
-evaluation and the audited idempotent note mutation remain planned.
+Seven of the eight planned V1 tools are implemented. The audited idempotent note
+mutation remains planned.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
 [PostgreSQL image initialization and storage](https://hub.docker.com/_/postgres),

@@ -241,9 +241,14 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
   }
 
   it.each(['a', 'b'] as const)(
-    'SDK client reads all six tools as tenant %s through SELECT-only credentials',
+    'SDK client reads all seven tools as tenant %s through SELECT-only credentials',
     async (tenant) => {
       const identity = tenants[tenant];
+      // Tenant A is an owner; exercise tenant B with the member role here.
+      if (tenant === 'b')
+        await database.admin.pool.query("UPDATE tenant_memberships SET role='member' WHERE id=$1", [
+          identity.membershipId,
+        ]);
       const client = new Client({ name: 'stdio-smoke', version: '1.0.0' });
       const transport = new StdioClientTransport({
         command: process.execPath,
@@ -262,7 +267,7 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
       const requestIds: string[] = [];
       try {
         await client.connect(transport);
-        expect((await client.listTools()).tools).toHaveLength(6);
+        expect((await client.listTools()).tools).toHaveLength(7);
         const profile = toolSchemas.get_profile.output.parse(
           (await client.callTool({ name: 'get_profile', arguments: {} })).structuredContent,
         );
@@ -329,6 +334,40 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
         ]);
         expect(secondOpportunityPage.nextCursor).toBeUndefined();
         requestIds.push(secondOpportunityPage.meta.requestId);
+        const evaluationArguments = { opportunityId: opportunityIds[tenant].newer };
+        const evaluationResult = await client.callTool({
+          name: 'evaluate_opportunity',
+          arguments: evaluationArguments,
+        });
+        const evaluation = toolSchemas.evaluate_opportunity.output.parse(
+          evaluationResult.structuredContent,
+        );
+        expect(evaluationResult.isError).not.toBe(true);
+        const evaluationContent = evaluationResult.content[0];
+        if (evaluationContent?.type !== 'text') throw new Error('Expected evaluation JSON content');
+        expect(JSON.parse(evaluationContent.text)).toEqual(evaluation);
+        expect(evaluation).toMatchObject({
+          opportunity: { id: opportunityIds[tenant].newer, source: 'upwork' },
+          scores: { skills: 80, projectType: 100, budget: null, experienceEvidence: 80 },
+          fit: { overallScore: 85, recommendation: 'strong_match' },
+          evaluationVersion: 'v1',
+        });
+        expect(evaluation.relevantEvidence.map(({ evidenceId }) => evidenceId).sort()).toEqual(
+          [knowledge[tenant].evidenceId, extraEvidenceIds[tenant]].sort(),
+        );
+        expect(
+          evaluation.relevantEvidence.every(({ projectId }) => projectId === identity.projectId),
+        ).toBe(true);
+        expect(evaluation.opportunity).not.toHaveProperty('tenantId');
+        expect(evaluation.opportunity).not.toHaveProperty('externalId');
+        requestIds.push(evaluation.meta.requestId);
+        const repeated = toolSchemas.evaluate_opportunity.output.parse(
+          (await client.callTool({ name: 'evaluate_opportunity', arguments: evaluationArguments }))
+            .structuredContent,
+        );
+        expect({ ...repeated, meta: evaluation.meta }).toEqual(evaluation);
+        expect(repeated.meta.requestId).not.toBe(evaluation.meta.requestId);
+        requestIds.push(repeated.meta.requestId);
         const firstSearchPage = toolSchemas.search_project_evidence.output.parse(
           (
             await client.callTool({
@@ -382,6 +421,22 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
         ]);
         requestIds.push(filteredSearch.meta.requestId);
         const other = tenant === 'a' ? tenants.b : tenants.a;
+        const otherKey = tenant === 'a' ? 'b' : 'a';
+        for (const opportunityId of [opportunityIds[otherKey].newer, randomUUID()]) {
+          const error = safeError(
+            await client.callTool({ name: 'evaluate_opportunity', arguments: { opportunityId } }),
+          );
+          expect(error.code).toBe('NOT_FOUND');
+          expect(error.message).toBe('The requested resource was not found.');
+        }
+        expect(
+          (
+            await client.callTool({
+              name: 'evaluate_opportunity',
+              arguments: { opportunityId: 'invalid' },
+            })
+          ).isError,
+        ).toBe(true);
         const foreignSearch = toolSchemas.search_project_evidence.output.parse(
           (
             await client.callTool({
@@ -417,10 +472,10 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
         await client.close();
       }
       expect(protocolErrors).toEqual([]);
-      expect(new Set(requestIds).size).toBe(10);
+      expect(new Set(requestIds).size).toBe(12);
       const records = logs(stderr);
       const invocations = records.filter((record) => record.event === 'mcp.invocation');
-      expect(invocations).toHaveLength(12); // SDK-rejected input never enters the application wrapper.
+      expect(invocations).toHaveLength(16); // SDK-rejected input never enters the application wrapper.
       expect(
         invocations
           .filter((record) => record.resultStatus === 'success')
@@ -438,8 +493,70 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
       expect(stderr).not.toContain(secret);
       expect(stderr).not.toContain(database.runtimeUrl);
       expect(stderr).not.toContain('Composite references');
+      const evaluations = invocations.filter(
+        (record) => record.toolName === 'evaluate_opportunity',
+      );
+      expect(evaluations.map((record) => record.resultStatus)).toEqual([
+        'success',
+        'success',
+        'error',
+        'error',
+      ]);
+      expect(
+        evaluations
+          .filter((record) => record.resultStatus === 'error')
+          .every((record) => record.errorCategory === 'NOT_FOUND'),
+      ).toBe(true);
     },
   );
+
+  it('returns safe NOT_FOUND when the tenant developer profile is missing', async () => {
+    const identity = tenants.a;
+    const deleted = await database.admin.pool.query(
+      'DELETE FROM developer_profiles WHERE tenant_id=$1 RETURNING id',
+      [identity.tenantId],
+    );
+    expect(deleted.rowCount).toBe(1);
+    // Tenant B retains its profile; evaluation must never fall back to it.
+    const client = new Client({ name: 'evaluation-missing-profile', version: '1.0.0' });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [main],
+      env: environment(identity),
+      stderr: 'pipe',
+    });
+    let stderr = '';
+    transport.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    let requestId: string | undefined;
+    try {
+      await client.connect(transport);
+      const error = safeError(
+        await client.callTool({
+          name: 'evaluate_opportunity',
+          arguments: { opportunityId: opportunityIds.a.newer },
+        }),
+      );
+      expect(error.code).toBe('NOT_FOUND');
+      expect(error.message).toBe('The requested resource was not found.');
+      requestId = error.requestId;
+    } finally {
+      await client.close();
+    }
+    const invocations = logs(stderr).filter((record) => record.event === 'mcp.invocation');
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0]).toMatchObject({
+      requestId,
+      toolName: 'evaluate_opportunity',
+      actorUserId: identity.userId,
+      tenantId: identity.tenantId,
+      resultStatus: 'error',
+      errorCategory: 'NOT_FOUND',
+    });
+    expect(stderr).not.toContain(secret);
+    expect(stderr).not.toContain(database.runtimeUrl);
+  });
 
   it('preserves protocol-only stdout across a discovery probe, legacy initialization, tools, and EOF', async () => {
     const server = rawServer(environment(tenants.a));
@@ -470,15 +587,18 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
         'search_project_evidence',
         'get_blockers',
         'list_opportunities',
+        'evaluate_opportunity',
       ] as const) {
         const response = await server.request('tools/call', {
           name,
           arguments:
             name === 'get_project'
               ? { projectId: tenants.a.projectId }
-              : name === 'search_project_evidence'
-                ? { query: 'PostgreSQL' }
-                : {},
+              : name === 'evaluate_opportunity'
+                ? { opportunityId: opportunityIds.a.newer }
+                : name === 'search_project_evidence'
+                  ? { query: 'PostgreSQL' }
+                  : {},
         });
         expect(response.error).toBeUndefined();
         const result = z
@@ -498,9 +618,9 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
       expect(await server.close()).toBe(0);
     }
     expect(server.failures).toEqual([]);
-    expect(server.output).toHaveLength(11);
+    expect(server.output).toHaveLength(12);
     const records = logs(server.stderr);
-    expect(records.filter((record) => record.event === 'mcp.invocation')).toHaveLength(6);
+    expect(records.filter((record) => record.event === 'mcp.invocation')).toHaveLength(7);
     expect(records.filter((record) => record.event === 'mcp.stopped')).toHaveLength(1);
     expect(server.output.join('')).not.toContain(secret);
     expect(server.stderr).not.toContain(secret);
@@ -523,6 +643,14 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
       await client.connect(transport);
       const error = safeError(await client.callTool({ name: 'get_profile', arguments: {} }));
       expect(error.code).toBe('UNAUTHENTICATED');
+      expect(
+        safeError(
+          await client.callTool({
+            name: 'evaluate_opportunity',
+            arguments: { opportunityId: opportunityIds.a.newer },
+          }),
+        ).code,
+      ).toBe('UNAUTHENTICATED');
       expect(logs(stderr)).toContainEqual(
         expect.objectContaining({
           event: 'mcp.invocation',
@@ -531,6 +659,64 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
           tenantId: null,
         }),
       );
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('denies viewer evaluation and rechecks a promotion to member on the same stdio session', async () => {
+    const identity = tenants.b;
+    const client = new Client({ name: 'evaluation-role-check', version: '1.0.0' });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [main],
+      env: environment(identity),
+      stderr: 'pipe',
+    });
+    let stderr = '';
+    transport.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    try {
+      await client.connect(transport);
+      const argumentsForEvaluation = { opportunityId: opportunityIds.b.newer };
+      const denied = safeError(
+        await client.callTool({ name: 'evaluate_opportunity', arguments: argumentsForEvaluation }),
+      );
+      expect(denied.code).toBe('FORBIDDEN');
+      // Listing remains available to viewers.
+      expect(
+        (await client.callTool({ name: 'list_opportunities', arguments: {} })).isError,
+      ).not.toBe(true);
+      await database.admin.pool.query("UPDATE tenant_memberships SET role='member' WHERE id=$1", [
+        identity.membershipId,
+      ]);
+      const allowed = toolSchemas.evaluate_opportunity.output.parse(
+        (await client.callTool({ name: 'evaluate_opportunity', arguments: argumentsForEvaluation }))
+          .structuredContent,
+      );
+      expect(allowed.evaluationVersion).toBe('v1');
+      expect(allowed.opportunity.id).toBe(opportunityIds.b.newer);
+      await client.close();
+      const invocations = logs(stderr).filter(
+        (record) => record.toolName === 'evaluate_opportunity',
+      );
+      expect(invocations).toHaveLength(2);
+      expect(invocations[0]).toMatchObject({
+        requestId: denied.requestId,
+        resultStatus: 'error',
+        errorCategory: 'FORBIDDEN',
+        tenantId: identity.tenantId,
+        actorUserId: identity.userId,
+      });
+      expect(invocations[1]).toMatchObject({
+        requestId: allowed.meta.requestId,
+        resultStatus: 'success',
+        tenantId: identity.tenantId,
+        actorUserId: identity.userId,
+      });
+      expect(stderr).not.toContain(secret);
+      expect(stderr).not.toContain(database.runtimeUrl);
     } finally {
       await client.close();
     }

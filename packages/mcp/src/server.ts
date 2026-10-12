@@ -15,6 +15,7 @@ import type { GetProject } from '@beloveddev/application/use-cases/get-project';
 import type { GetBlockers } from '@beloveddev/application/use-cases/get-blockers';
 import type { SearchProjectEvidence } from '@beloveddev/application/use-cases/search-project-evidence';
 import type { ListOpportunities } from '@beloveddev/application/use-cases/list-opportunities';
+import type { EvaluateOpportunity } from '@beloveddev/application/use-cases/evaluate-opportunity';
 import { safeErrorSchema, toolSchemas, type ToolName } from './schemas.js';
 
 export interface ReadUseCases {
@@ -24,6 +25,7 @@ export interface ReadUseCases {
   readonly getBlockers: Pick<GetBlockers, 'execute'>;
   readonly searchProjectEvidence: Pick<SearchProjectEvidence, 'execute'>;
   readonly listOpportunities: Pick<ListOpportunities, 'execute'>;
+  readonly evaluateOpportunity: Pick<EvaluateOpportunity, 'execute'>;
 }
 export interface InvocationLog {
   readonly event: 'mcp.invocation';
@@ -171,6 +173,19 @@ export function createMcpServer(dependencies: {
     (input) =>
       invoke('list_opportunities', (context) =>
         dependencies.useCases.listOpportunities.execute(context, input),
+      ),
+  );
+  server.registerTool(
+    'evaluate_opportunity',
+    {
+      description: toolSchemas.evaluate_opportunity.description,
+      inputSchema: toolSchemas.evaluate_opportunity.input,
+      outputSchema: toolSchemas.evaluate_opportunity.output,
+      annotations,
+    },
+    (input) =>
+      invoke('evaluate_opportunity', (context) =>
+        dependencies.useCases.evaluateOpportunity.execute(context, input),
       ),
   );
   return server;

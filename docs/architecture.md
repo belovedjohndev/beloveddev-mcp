@@ -1,6 +1,6 @@
 # BelovedDev MCP V1 — Architecture
 
-## Implemented architecture through Milestone 6-A
+## Implemented architecture through Milestone 6-B
 
 The stdio executable composes trusted local request context, application use
 cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
@@ -547,7 +547,17 @@ structured logger.
 ## 15. Opportunity Evaluation Architecture
 
 Milestone 6-A implements opportunity evaluation as an application/domain
-operation. It is not registered with MCP until Milestone 6-B.
+operation. Milestone 6-B exposes it through the read-only `evaluate_opportunity`
+MCP tool using explicit `McpServer.registerTool()` registration. Its strict input
+contains only `opportunityId`; the strict success schema preserves nullable
+dimensions, structured finding codes, ten evidence records, and version `v1`.
+Finding-code and recommendation schemas are exhaustively checked against the
+existing domain unions at compile time so the transport contract cannot drift.
+The composition root uses existing opportunity/profile/evidence repositories,
+authorization, and the unchanged default policy. The shared invocation boundary
+adds request IDs, validates output, logs safe metadata, and maps application
+failures to safe errors with no success `structuredContent`. SDK-invalid input
+still fails before trusted-context resolution or application execution.
 
 It may use:
 

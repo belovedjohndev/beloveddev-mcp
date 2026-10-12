@@ -439,15 +439,21 @@ absence of database writes.
 
 ### Milestone 6-B — MCP exposure
 
-Planned tool:
+Implemented tool:
 
 ```text
 evaluate_opportunity
 ```
 
-Milestone 6-B will add the strict MCP schema, explicit registration,
-composition-root wiring, contract tests, invocation logging coverage, and stdio
-integration. No MCP exposure is part of 6-A.
+Milestone 6-B adds strict MCP input/success-output schemas, explicit registration,
+and composition-root wiring through the existing repositories, authorization,
+and versioned evaluation use case. Contract tests verify SDK input rejection,
+safe application errors, request IDs, owner/member access, viewer denial before
+protected repository work, strict result validation, and invocation logging.
+Real PostgreSQL stdio tests exercise all seven tools, evaluation determinism,
+tenant isolation, owner/member access, viewer denial, role revalidation, safe
+errors, and protocol-only stdout through SELECT-only runtime credentials.
+The policy, scoring, and evidence retrieval remain the M6-A implementation.
 
 ---
 

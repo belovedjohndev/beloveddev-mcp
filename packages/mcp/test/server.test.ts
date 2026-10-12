@@ -6,6 +6,7 @@ import {
 } from '@modelcontextprotocol/client';
 import {
   PermissionAuthorization,
+  permissionsForRole,
   type RequestContext,
 } from '@beloveddev/application/request-context';
 import { ApplicationError } from '@beloveddev/application/application-error';
@@ -16,7 +17,14 @@ import { GetProject } from '@beloveddev/application/use-cases/get-project';
 import { GetBlockers } from '@beloveddev/application/use-cases/get-blockers';
 import { SearchProjectEvidence } from '@beloveddev/application/use-cases/search-project-evidence';
 import { ListOpportunities } from '@beloveddev/application/use-cases/list-opportunities';
-import type { OpportunityListQuery, OpportunityPage } from '@beloveddev/application/repositories';
+import { EvaluateOpportunity } from '@beloveddev/application/use-cases/evaluate-opportunity';
+import { EvaluationPolicyV1 } from '@beloveddev/domain/evaluation-policy-v1';
+import type {
+  OpportunityListQuery,
+  OpportunityPage,
+  OpportunityRepository,
+  EvidenceRepository,
+} from '@beloveddev/application/repositories';
 import type { Opportunity } from '@beloveddev/domain/entities';
 import { SignedCursorCodec } from '@beloveddev/infrastructure/signed-cursor';
 import { createReadFixture, fixtureId } from '@beloveddev/test-support/read-fixtures';
@@ -45,16 +53,19 @@ describe('MCP SDK and application contracts', () => {
     getBlockers: GetBlockers;
     searchProjectEvidence: SearchProjectEvidence;
     listOpportunities: ListOpportunities;
+    evaluateOpportunity: EvaluateOpportunity;
   };
   let opportunity: Opportunity;
   let listOpportunityPage: ReturnType<
     typeof vi.fn<(input: OpportunityListQuery) => Promise<OpportunityPage>>
   >;
   let resolve: ReturnType<typeof vi.fn<(requestId: string) => Promise<RequestContext | null>>>;
+  let getOpportunityById: ReturnType<typeof vi.fn<OpportunityRepository['getById']>>;
+  let evaluationSearch: ReturnType<typeof vi.fn<EvidenceRepository['search']>>;
 
   beforeEach(async () => {
     fixture = createReadFixture();
-    principal = fixture.context;
+    principal = { ...fixture.context, role: 'owner', permissions: permissionsForRole('owner') };
     logs = [];
     const authorization = new PermissionAuthorization();
     const cursors = new SignedCursorCodec('contract-test-secret-at-least-32-bytes');
@@ -84,6 +95,34 @@ describe('MCP SDK and application contracts', () => {
       fixture.calls.push({ method: 'opportunities', input });
       return Promise.resolve({ items: [opportunity], nextPosition: null });
     });
+    getOpportunityById = vi.fn((input) => {
+      fixture.calls.push({ method: 'opportunity', input });
+      return Promise.resolve(
+        input.tenantId === opportunity.tenantId && input.opportunityId === opportunity.id
+          ? opportunity
+          : null,
+      );
+    });
+    evaluationSearch = vi.fn((input) => {
+      fixture.calls.push({ method: 'evaluationEvidence', input });
+      return Promise.resolve({
+        items: [
+          {
+            evidenceId: fixture.evidence.id,
+            projectId: fixture.project.id,
+            projectName: fixture.project.name,
+            title: fixture.evidence.title,
+            summary: fixture.evidence.summary,
+            type: fixture.evidence.type,
+            skills: ['TypeScript', 'PostgreSQL'],
+            capabilities: [],
+            businessOutcomes: [],
+            relevanceScore: 0.75,
+          },
+        ],
+        nextPosition: null,
+      });
+    });
     useCases = {
       getProfile: new GetProfile(r.profiles, authorization),
       listProjects: new ListProjects(r.projects, authorization, cursors),
@@ -94,6 +133,14 @@ describe('MCP SDK and application contracts', () => {
         { listPage: listOpportunityPage },
         authorization,
         cursors,
+      ),
+      evaluateOpportunity: new EvaluateOpportunity(
+        {
+          opportunities: { getById: getOpportunityById },
+          profiles: r.profiles,
+          evidence: { search: evaluationSearch },
+        },
+        authorization,
       ),
     };
     resolve = vi.fn((requestId: string) =>
@@ -118,7 +165,7 @@ describe('MCP SDK and application contracts', () => {
     await server?.close();
   });
 
-  it('advertises exactly six read-only tools with strict input and success-output schemas', async () => {
+  it('advertises exactly seven read-only tools with strict input and success-output schemas', async () => {
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual([
       'get_profile',
@@ -127,11 +174,13 @@ describe('MCP SDK and application contracts', () => {
       'search_project_evidence',
       'get_blockers',
       'list_opportunities',
+      'evaluate_opportunity',
     ]);
     for (const tool of listed.tools) {
       expect(tool.annotations).toMatchObject({
         readOnlyHint: true,
         destructiveHint: false,
+        idempotentHint: true,
         openWorldHint: false,
       });
       expect(tool.inputSchema['additionalProperties']).toBe(false);
@@ -152,6 +201,16 @@ describe('MCP SDK and application contracts', () => {
     expect(opportunities?.description).toMatch(
       /current tenant opportunities.*exact status\/source.*case-insensitive.*makes no changes.*opportunities:read/i,
     );
+    const evaluation = listed.tools.find((tool) => tool.name === 'evaluate_opportunity');
+    expect(evaluation?.description).toMatch(
+      /current tenant.*deterministic v1.*read-only.*opportunities:evaluate/i,
+    );
+    expect(evaluation?.description).toMatch(/strengths.*gaps.*risks.*recommendation/i);
+    expect(Object.keys(evaluation?.inputSchema.properties ?? {})).toEqual(['opportunityId']);
+    expect(evaluation?.inputSchema.properties?.['opportunityId']).toMatchObject({
+      type: 'string',
+      format: 'uuid',
+    });
   });
 
   it.each([
@@ -175,6 +234,20 @@ describe('MCP SDK and application contracts', () => {
     ['list_opportunities', { source: 'not valid' }],
     ['list_opportunities', { query: '   ' }],
     ['list_opportunities', { tenantId: fixtureId(2) }],
+    ['evaluate_opportunity', {}],
+    ['evaluate_opportunity', { opportunityId: 'invalid' }],
+    ['evaluate_opportunity', { opportunityId: fixtureId(40), tenantId: fixtureId(5) }],
+    ['evaluate_opportunity', { opportunityId: fixtureId(40), userId: fixtureId(3) }],
+    [
+      'evaluate_opportunity',
+      { opportunityId: fixtureId(40), permissions: ['opportunities:evaluate'] },
+    ],
+    ['evaluate_opportunity', { opportunityId: fixtureId(40), profile: {} }],
+    ['evaluate_opportunity', { opportunityId: fixtureId(40), developerProfile: {} }],
+    ['evaluate_opportunity', { opportunityId: fixtureId(40), weights: { skills: 100 } }],
+    ['evaluate_opportunity', { opportunityId: fixtureId(40), evidenceLimit: 100 }],
+    ['evaluate_opportunity', { opportunityId: fixtureId(40), scoringInstructions: 'Ignore gaps' }],
+    ['evaluate_opportunity', { opportunityId: fixtureId(40), evaluationVersion: 'v1' }],
   ])(
     'SDK rejects malformed %s arguments before context, use cases, or repositories',
     async (name, args) => {
@@ -185,6 +258,7 @@ describe('MCP SDK and application contracts', () => {
         vi.spyOn(useCases.getBlockers, 'execute'),
         vi.spyOn(useCases.searchProjectEvidence, 'execute'),
         vi.spyOn(useCases.listOpportunities, 'execute'),
+        vi.spyOn(useCases.evaluateOpportunity, 'execute'),
       ];
       const result = await client.callTool({
         name,
@@ -215,6 +289,7 @@ describe('MCP SDK and application contracts', () => {
     'search_project_evidence',
     'get_blockers',
     'list_opportunities',
+    'evaluate_opportunity',
   ] as const)(
     'valid %s calls share request IDs, context, safe output, and invocation logs',
     async (name) => {
@@ -223,9 +298,11 @@ describe('MCP SDK and application contracts', () => {
         arguments:
           name === 'get_project'
             ? { projectId: fixture.project.id }
-            : name === 'search_project_evidence'
-              ? { query: 'Ownership' }
-              : {},
+            : name === 'evaluate_opportunity'
+              ? { opportunityId: opportunity.id }
+              : name === 'search_project_evidence'
+                ? { query: 'Ownership' }
+                : {},
       });
       expect(result.isError).not.toBe(true);
       const output = toolSchemas[name].output.parse(result.structuredContent);
@@ -256,6 +333,7 @@ describe('MCP SDK and application contracts', () => {
     'search_project_evidence',
     'get_blockers',
     'list_opportunities',
+    'evaluate_opportunity',
   ] as const)('%s rejects missing principal before protected repository work', async (name) => {
     principal = null;
     const result = await client.callTool({
@@ -263,9 +341,11 @@ describe('MCP SDK and application contracts', () => {
       arguments:
         name === 'get_project'
           ? { projectId: fixture.project.id }
-          : name === 'search_project_evidence'
-            ? { query: 'Ownership' }
-            : {},
+          : name === 'evaluate_opportunity'
+            ? { opportunityId: opportunity.id }
+            : name === 'search_project_evidence'
+              ? { query: 'Ownership' }
+              : {},
     });
     const payload = errorPayload(result);
     expect(payload.error.code).toBe('UNAUTHENTICATED');
@@ -280,6 +360,7 @@ describe('MCP SDK and application contracts', () => {
     'search_project_evidence',
     'get_blockers',
     'list_opportunities',
+    'evaluate_opportunity',
   ] as const)('%s requires its permission before repository work', async (name) => {
     principal = {
       ...fixture.context,
@@ -291,9 +372,11 @@ describe('MCP SDK and application contracts', () => {
         arguments:
           name === 'get_project'
             ? { projectId: fixture.project.id }
-            : name === 'search_project_evidence'
-              ? { query: 'Ownership' }
-              : {},
+            : name === 'evaluate_opportunity'
+              ? { opportunityId: opportunity.id }
+              : name === 'search_project_evidence'
+                ? { query: 'Ownership' }
+                : {},
       }),
     );
     expect(payload.error.code).toBe('FORBIDDEN');
@@ -312,6 +395,291 @@ describe('MCP SDK and application contracts', () => {
     expect(fixture.calls).toEqual([
       { method: 'profile', input: { tenantId: fixture.context.tenantId } },
     ]);
+  });
+
+  it.each(['owner', 'member'] as const)(
+    'evaluates through the shared boundary for %s',
+    async (role) => {
+      principal = { ...fixture.context, role, permissions: permissionsForRole(role) };
+      const result = await client.callTool({
+        name: 'evaluate_opportunity',
+        arguments: { opportunityId: opportunity.id },
+      });
+      const output = toolSchemas.evaluate_opportunity.output.parse(result.structuredContent);
+      expect(result.isError).not.toBe(true);
+      const { meta, ...evaluation } = output;
+      expect(evaluation).toEqual(
+        new EvaluationPolicyV1().evaluate({
+          profile: fixture.profile,
+          opportunity,
+          evidence: [
+            {
+              projectId: fixture.project.id,
+              projectName: fixture.project.name,
+              evidenceId: fixture.evidence.id,
+              title: fixture.evidence.title,
+              summary: fixture.evidence.summary,
+              skills: ['TypeScript', 'PostgreSQL'],
+              relevanceScore: 0.75,
+            },
+          ],
+          evidenceRetrievalIncomplete: false,
+        }),
+      );
+      expect(getOpportunityById).toHaveBeenCalledWith({
+        tenantId: fixture.context.tenantId,
+        opportunityId: opportunity.id,
+      });
+      expect(evaluationSearch).toHaveBeenCalledWith({
+        tenantId: fixture.context.tenantId,
+        query: '"typescript" OR "postgresql"',
+        limit: 10,
+      });
+      expect(output.evaluationVersion).toBe('v1');
+      expect(output.scores.budget).toBeNull();
+      expect(logs[0]).toMatchObject({
+        requestId: meta.requestId,
+        toolName: 'evaluate_opportunity',
+        resultStatus: 'success',
+      });
+      expect(JSON.stringify(logs)).not.toContain(opportunity.description);
+      expect(JSON.stringify(logs)).not.toContain('Composite references');
+      const again = toolSchemas.evaluate_opportunity.output.parse(
+        (
+          await client.callTool({
+            name: 'evaluate_opportunity',
+            arguments: { opportunityId: opportunity.id },
+          })
+        ).structuredContent,
+      );
+      expect(again.meta.requestId).not.toBe(meta.requestId);
+      expect({ ...again, meta }).toEqual(output);
+    },
+  );
+
+  it('preserves skill gaps, strengths, and concerns in the public evaluation result', async () => {
+    opportunity = { ...opportunity, requiredSkills: ['TypeScript', 'Rust'] };
+    const result = await client.callTool({
+      name: 'evaluate_opportunity',
+      arguments: { opportunityId: opportunity.id },
+    });
+    const output = toolSchemas.evaluate_opportunity.output.parse(result.structuredContent);
+    expect(result.isError).not.toBe(true);
+    expect(output.matchedSkills).toEqual(['typescript']);
+    expect(output.missingSkills).toEqual(['rust']);
+    expect(output.strengths).toContainEqual({
+      code: 'preferred_project_type',
+      message: 'The opportunity matches a preferred project type.',
+    });
+    expect(output.concerns).toContainEqual({
+      code: 'missing_required_skills',
+      message: 'Missing required skills: rust.',
+    });
+    expect(output.concerns.map(({ code }) => code)).toContain('budget_not_comparable');
+    expect(output.relevantEvidence).toEqual([
+      {
+        projectId: fixture.project.id,
+        projectName: fixture.project.name,
+        evidenceId: fixture.evidence.id,
+        title: fixture.evidence.title,
+        summary: fixture.evidence.summary,
+        relevanceScore: 0.75,
+      },
+    ]);
+  });
+
+  it('accepts all domain recommendations and the ten-record evidence boundary', async () => {
+    const result = await useCases.evaluateOpportunity.execute(principal, {
+      opportunityId: opportunity.id,
+    });
+    const schema = toolSchemas.evaluate_opportunity.output;
+    for (const recommendation of ['strong_match', 'good_match', 'review', 'weak_match', 'skip']) {
+      expect(
+        schema.safeParse({
+          ...result,
+          fit: { ...result.fit, recommendation },
+          meta: { requestId: fixtureId(1) },
+        }).success,
+      ).toBe(true);
+    }
+    const bounded = schema.parse({
+      ...result,
+      relevantEvidence: Array.from({ length: 10 }, () => result.relevantEvidence[0]),
+      meta: { requestId: fixtureId(1) },
+    });
+    expect(bounded.relevantEvidence).toHaveLength(10);
+  });
+
+  it('denies a viewer before opportunity, profile, or evidence access', async () => {
+    principal = { ...fixture.context, role: 'viewer', permissions: permissionsForRole('viewer') };
+    const payload = errorPayload(
+      await client.callTool({
+        name: 'evaluate_opportunity',
+        arguments: { opportunityId: opportunity.id },
+      }),
+    );
+    expect(payload.error.code).toBe('FORBIDDEN');
+    expect(logs[0]).toMatchObject({
+      requestId: payload.error.requestId,
+      errorCategory: 'FORBIDDEN',
+      toolName: 'evaluate_opportunity',
+    });
+    expect(fixture.calls).toEqual([]);
+    expect(getOpportunityById).not.toHaveBeenCalled();
+    expect(evaluationSearch).not.toHaveBeenCalled();
+  });
+
+  it('maps foreign and unknown opportunity IDs to identical safe NOT_FOUND errors', async () => {
+    opportunity = { ...opportunity, tenantId: fixture.otherContext.tenantId };
+    for (const opportunityId of [opportunity.id, fixtureId(999)]) {
+      const payload = errorPayload(
+        await client.callTool({ name: 'evaluate_opportunity', arguments: { opportunityId } }),
+      );
+      expect(payload.error.code).toBe('NOT_FOUND');
+      expect(payload.error.message).toBe('The requested resource was not found.');
+      expect(payload.error.requestId).toBe(logs.at(-1)?.requestId);
+    }
+    expect(fixture.calls.map(({ method }) => method)).toEqual(['opportunity', 'opportunity']);
+    expect(evaluationSearch).not.toHaveBeenCalled();
+  });
+
+  it('maps a missing tenant profile to safe NOT_FOUND before evidence work', async () => {
+    fixture.data.profiles.splice(0, 1);
+    const payload = errorPayload(
+      await client.callTool({
+        name: 'evaluate_opportunity',
+        arguments: { opportunityId: opportunity.id },
+      }),
+    );
+    expect(payload.error.code).toBe('NOT_FOUND');
+    expect(evaluationSearch).not.toHaveBeenCalled();
+  });
+
+  it.each(['opportunity', 'profile', 'evidence'] as const)(
+    'safely maps evaluation %s infrastructure failures',
+    async (stage) => {
+      const failure = new Error('SQL password=private-secret C:\\private\\database');
+      if (stage === 'opportunity') getOpportunityById.mockRejectedValueOnce(failure);
+      else if (stage === 'profile')
+        vi.spyOn(fixture.repositories.profiles, 'getByTenant').mockRejectedValueOnce(failure);
+      else evaluationSearch.mockRejectedValueOnce(failure);
+      const payload = errorPayload(
+        await client.callTool({
+          name: 'evaluate_opportunity',
+          arguments: { opportunityId: opportunity.id },
+        }),
+      );
+      expect(payload.error.code).toBe('INTERNAL_ERROR');
+      expect(logs[0]).toMatchObject({
+        requestId: payload.error.requestId,
+        resultStatus: 'error',
+        errorCategory: 'INTERNAL_ERROR',
+      });
+      expect(JSON.stringify({ payload, logs })).not.toContain('private-secret');
+      expect(JSON.stringify({ payload, logs })).not.toContain('database');
+    },
+  );
+
+  it('validates nullable evaluation dimensions and partial-retrieval findings', async () => {
+    opportunity = { ...opportunity, requiredSkills: [], preferredSkills: [], projectType: null };
+    const output = toolSchemas.evaluate_opportunity.output.parse(
+      (
+        await client.callTool({
+          name: 'evaluate_opportunity',
+          arguments: { opportunityId: opportunity.id },
+        })
+      ).structuredContent,
+    );
+    expect(output.scores).toEqual({
+      skills: null,
+      projectType: null,
+      budget: null,
+      experienceEvidence: null,
+    });
+    expect(output.fit).toEqual({ overallScore: 50, recommendation: 'review' });
+    expect(output.riskFlags.map(({ code }) => code)).toContain('insufficient_evaluation_signals');
+    opportunity = { ...opportunity, requiredSkills: ['x'.repeat(1001)] };
+    const partial = toolSchemas.evaluate_opportunity.output.parse(
+      (
+        await client.callTool({
+          name: 'evaluate_opportunity',
+          arguments: { opportunityId: opportunity.id },
+        })
+      ).structuredContent,
+    );
+    expect(partial.riskFlags.map(({ code }) => code)).toContain('evidence_retrieval_incomplete');
+    expect(partial.riskFlags.map(({ code }) => code)).not.toContain('no_portfolio_evidence');
+  });
+
+  it('rejects malformed evaluation success results at every output boundary', async () => {
+    const result = await useCases.evaluateOpportunity.execute(principal, {
+      opportunityId: opportunity.id,
+    });
+    const valid = { ...result, meta: { requestId: fixtureId(1) } };
+    const schema = toolSchemas.evaluate_opportunity.output;
+    const evidence = valid.relevantEvidence[0];
+    if (evidence === undefined) throw new Error('Expected evidence fixture');
+    for (const output of [
+      { ...valid, tenantId: fixture.context.tenantId },
+      { ...valid, opportunity: { ...valid.opportunity, tenantId: fixture.context.tenantId } },
+      { ...valid, fit: { overallScore: 101, recommendation: 'strong_match' } },
+      { ...valid, fit: { overallScore: 50.5, recommendation: 'review' } },
+      { ...valid, fit: { ...valid.fit, recommendation: 'invented' } },
+      { ...valid, scores: { ...valid.scores, budget: 50 } },
+      { ...valid, scores: { ...valid.scores, skills: -1 } },
+      { ...valid, evaluationVersion: 'v2' },
+      { ...valid, strengths: [{ code: 'invented', message: 'invalid' }] },
+      { ...valid, concerns: [{ code: 'invented', message: 'invalid' }] },
+      { ...valid, riskFlags: [{ code: 'invented', message: 'invalid' }] },
+      { ...valid, relevantEvidence: [{ ...evidence, skills: ['private'] }] },
+      { ...valid, relevantEvidence: [{ ...evidence, relevanceScore: -1 }] },
+      { ...valid, relevantEvidence: [{ ...evidence, relevanceScore: Number.NaN }] },
+      {
+        ...valid,
+        relevantEvidence: [{ ...evidence, relevanceScore: Number.POSITIVE_INFINITY }],
+      },
+      {
+        ...valid,
+        strengths: [{ code: 'preferred_project_type', message: 'invalid', extra: true }],
+      },
+      {
+        ...valid,
+        relevantEvidence: Array.from({ length: 11 }, () => ({
+          projectId: fixture.project.id,
+          projectName: 'project',
+          evidenceId: fixture.evidence.id,
+          title: 'title',
+          summary: 'summary',
+          relevanceScore: 0.5,
+        })),
+      },
+      {
+        ...valid,
+        relevantEvidence: [
+          {
+            projectId: fixture.project.id,
+            projectName: 'project',
+            evidenceId: 'invalid',
+            title: 'title',
+            summary: 'summary',
+            relevanceScore: Number.POSITIVE_INFINITY,
+          },
+        ],
+      },
+    ])
+      expect(schema.safeParse(output).success).toBe(false);
+    vi.spyOn(useCases.evaluateOpportunity, 'execute').mockResolvedValue({
+      ...result,
+      fit: { ...result.fit, overallScore: 101 },
+    });
+    const payload = errorPayload(
+      await client.callTool({
+        name: 'evaluate_opportunity',
+        arguments: { opportunityId: opportunity.id },
+      }),
+    );
+    expect(payload.error.code).toBe('INTERNAL_ERROR');
+    expect(logs.at(-1)?.errorCategory).toBe('INTERNAL_ERROR');
   });
 
   it('lists projects with defaults, filters, tenant scope, and signed continuation', async () => {
