@@ -10,6 +10,7 @@ import {
   projectStatuses,
   recordStatuses,
   type DeveloperProfile,
+  type ProjectNote,
 } from '@beloveddev/domain/entities';
 import { sql } from 'drizzle-orm';
 import {
@@ -360,6 +361,11 @@ export const projectNotes = pgTable(
       table.authorUserId,
       table.idempotencyKey,
     ),
+    unique('project_notes_tenant_id_author_unique').on(
+      table.tenantId,
+      table.id,
+      table.authorUserId,
+    ),
     index('project_notes_tenant_project_created_idx').on(
       table.tenantId,
       table.projectId,
@@ -368,6 +374,50 @@ export const projectNotes = pgTable(
     ),
     check('project_notes_content_nonblank', sql`${table.content} ~ '[^[:space:]]'`),
     check('project_notes_idempotency_key_nonblank', sql`${table.idempotencyKey} ~ '[^[:space:]]'`),
+  ],
+);
+
+export const auditLogs = pgTable(
+  'audit_logs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    tenantId: uuid('tenant_id')
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'restrict' }),
+    actorUserId: uuid('actor_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    action: text('action').notNull(),
+    resourceType: text('resource_type').notNull(),
+    resourceId: uuid('resource_id').notNull(),
+    requestId: uuid('request_id').notNull(),
+    metadata: jsonb('metadata').$type<Pick<ProjectNote, 'projectId' | 'category'>>().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // M7-A only audits note creation. Bind tenant, resource, and actor together.
+    foreignKey({
+      name: 'audit_logs_tenant_note_actor_fk',
+      columns: [table.tenantId, table.resourceId, table.actorUserId],
+      foreignColumns: [projectNotes.tenantId, projectNotes.id, projectNotes.authorUserId],
+    }).onDelete('restrict'),
+    unique('audit_logs_tenant_action_resource_unique').on(
+      table.tenantId,
+      table.action,
+      table.resourceId,
+    ),
+    check('audit_logs_action_supported', sql`${table.action} = 'project_note.created'`),
+    check('audit_logs_resource_type_supported', sql`${table.resourceType} = 'project_note'`),
+    check(
+      'audit_logs_metadata_shape',
+      sql`(
+        jsonb_typeof(${table.metadata}) = 'object'
+        AND ${table.metadata} ?& ARRAY['projectId', 'category']
+        AND (${table.metadata} - 'projectId' - 'category') = '{}'::jsonb
+        AND jsonb_typeof(${table.metadata}->'projectId') = 'string'
+        AND jsonb_typeof(${table.metadata}->'category') = 'string'
+      ) IS TRUE`,
+    ),
   ],
 );
 

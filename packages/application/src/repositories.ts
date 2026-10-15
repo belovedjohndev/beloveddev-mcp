@@ -110,6 +110,27 @@ export interface NoteRepository {
   listRecentByProject(input: ProjectKnowledgeQuery): Promise<readonly ProjectNote[]>;
 }
 
+export interface ProjectNoteCreationInput {
+  readonly tenantId: string;
+  readonly authorUserId: string;
+  readonly requestId: string;
+  readonly projectId: string;
+  readonly category: ProjectNote['category'];
+  readonly content: string;
+  readonly idempotencyKey: string;
+}
+
+export interface ProjectNoteCreationResult {
+  readonly note: ProjectNote;
+  readonly created: boolean;
+}
+
+/** One atomic operation: tenant ownership, idempotent insert, and durable audit. */
+export interface ProjectNoteCreationRepository {
+  /** Null means project missing in this tenant; conflicting key reuse throws CONFLICT. */
+  create(input: ProjectNoteCreationInput): Promise<ProjectNoteCreationResult | null>;
+}
+
 export interface ProjectPageQuery extends ProjectListQuery {
   readonly clientId?: string;
   readonly query?: string;

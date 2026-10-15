@@ -1,6 +1,6 @@
 # BelovedDev MCP V1 — Architecture
 
-## Implemented architecture through Milestone 6-B
+## Implemented architecture through Milestone 7-A
 
 The stdio executable composes trusted local request context, application use
 cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
@@ -15,8 +15,9 @@ package remains metadata-only.
 
 Missing and cross-tenant lookups return null; knowledge listings return empty arrays. Repository errors expose safe
 categories without raw SQL causes. Project creation is one atomic INSERT with a
-composite client ownership foreign key. It is an internal persistence operation;
-authenticated, permission-checked, audited user-facing mutations remain deferred.
+composite client ownership foreign key. It is an internal persistence operation.
+Milestone 7-A adds authorized, audited project-note creation in the application
+and infrastructure layers; mutation exposure through MCP remains deferred.
 
 Real PostgreSQL tests apply migrations to fresh databases and use a restricted
 runtime login for repository queries, separate from migration/fixture credentials.
@@ -34,7 +35,7 @@ transaction abstraction or use case is needed for these single-statement reads.
 Composite foreign keys protect project-child ownership and note author membership.
 Membership existence is database enforced; active membership and read permissions
 are resolved through trusted context. The note uniqueness constraint is
-storage groundwork, not the Milestone 7 retry/audit workflow.
+storage groundwork used by the Milestone 7-A retry/audit workflow.
 
 ## 1. Architectural Goal
 
@@ -444,13 +445,42 @@ Transaction contents:
 
 ```text
 verify project tenant scope
-check idempotency key
-insert note
-insert audit record
+attempt note insertion using the unique key
+resolve duplicates through committed-note lookup and payload comparison
+insert audit record for new notes
 commit
 ```
 
 If any step fails, roll back the complete operation.
+
+### Implemented M7-A boundary
+
+`CreateProjectNote` authorizes `project_notes:create` before validating its strict
+four-field input. It obtains tenant, author, and request ID only from trusted
+context. A dedicated `ProjectNoteCreationRepository` port represents the one
+atomic command; there is no generic transaction manager or separate non-atomic
+audit repository.
+
+`PostgresProjectNoteCreationRepository` owns an explicit READ COMMITTED
+transaction. It verifies the tenant-scoped project, inserts with the existing
+tenant/author/key conflict target, and audits new creations before committing.
+A losing insert waits for the winning transaction and then reads its committed
+note in a separate statement. The domain comparison checks exact project,
+category, and content equality. Matching retries return the original note;
+conflicting retries fail without writes. Storage failures, including commit
+failures, become safe internal errors. There are no automatic transaction retries.
+
+The existing project and author-membership foreign keys protect insertion against
+concurrent administrative deletion. Such a deletion can abort a creation safely;
+the command does not grant UPDATE privileges merely to acquire explicit row
+locks. Trusted context is resolved before the command, as in existing use cases;
+this slice does not introduce a new identity or revocation mechanism.
+
+The additive audit migration preserves historical notes and adds a composite
+note key to enforce audit tenant/resource/actor integrity. Runtime privileges are
+SELECT on required existing resources plus INSERT on notes and audits, with no
+unrelated writes or audit reads. The seven existing MCP registrations and their
+read-only runtime remain unchanged. M7-B will wire the mutation interface.
 
 ## 13. Idempotency Model
 

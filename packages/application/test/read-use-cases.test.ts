@@ -28,8 +28,26 @@ describe('read use cases without MCP', () => {
   });
 
   it.each([
-    ['owner', ['profile:read', 'projects:read', 'opportunities:read', 'opportunities:evaluate']],
-    ['member', ['profile:read', 'projects:read', 'opportunities:read', 'opportunities:evaluate']],
+    [
+      'owner',
+      [
+        'profile:read',
+        'projects:read',
+        'opportunities:read',
+        'opportunities:evaluate',
+        'project_notes:create',
+      ],
+    ],
+    [
+      'member',
+      [
+        'profile:read',
+        'projects:read',
+        'opportunities:read',
+        'opportunities:evaluate',
+        'project_notes:create',
+      ],
+    ],
     ['viewer', ['profile:read', 'projects:read', 'opportunities:read']],
   ] as const)('%s has exactly the implemented permissions', (role, permissions) => {
     expect(permissionsForRole(role)).toEqual(permissions);

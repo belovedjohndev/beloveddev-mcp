@@ -24,6 +24,14 @@
       "types": "./dist/read-inputs.d.ts",
       "import": "./dist/read-inputs.js"
     },
+    "./write-inputs": {
+      "types": "./dist/write-inputs.d.ts",
+      "import": "./dist/write-inputs.js"
+    },
+    "./use-cases/create-project-note": {
+      "types": "./dist/use-cases/create-project-note.d.ts",
+      "import": "./dist/use-cases/create-project-note.js"
+    },
     "./pagination": {
       "types": "./dist/pagination.d.ts",
       "import": "./dist/pagination.js"

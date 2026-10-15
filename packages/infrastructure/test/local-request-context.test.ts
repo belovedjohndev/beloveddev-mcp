@@ -20,8 +20,26 @@ describe('operator-configured local request context', () => {
     expect(getActiveByUser).not.toHaveBeenCalled();
   });
   it.each([
-    ['owner', ['profile:read', 'projects:read', 'opportunities:read', 'opportunities:evaluate']],
-    ['member', ['profile:read', 'projects:read', 'opportunities:read', 'opportunities:evaluate']],
+    [
+      'owner',
+      [
+        'profile:read',
+        'projects:read',
+        'opportunities:read',
+        'opportunities:evaluate',
+        'project_notes:create',
+      ],
+    ],
+    [
+      'member',
+      [
+        'profile:read',
+        'projects:read',
+        'opportunities:read',
+        'opportunities:evaluate',
+        'project_notes:create',
+      ],
+    ],
     ['viewer', ['profile:read', 'projects:read', 'opportunities:read']],
   ] as const)(
     'resolves %s from active membership with role-derived permissions',

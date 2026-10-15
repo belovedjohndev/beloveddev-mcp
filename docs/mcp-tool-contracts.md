@@ -696,6 +696,9 @@ Append a contextual note to a project.
 
 This is the only planned V1 MCP mutation.
 
+Milestone 7-A implements the application command and PostgreSQL transaction only.
+The MCP tool remains unregistered until Milestone 7-B.
+
 ## Input
 
 ```text
@@ -705,7 +708,7 @@ content
 idempotencyKey
 ```
 
-Suggested constraints:
+Implemented application constraints (all four fields required; unknown fields rejected):
 
 ```text
 content:
@@ -714,6 +717,14 @@ content:
 idempotencyKey:
 8..128 characters
 ```
+
+`projectId` is a UUID. Content and key must contain a non-whitespace character.
+Both must be well-formed Unicode without NUL characters, so PostgreSQL can
+preserve them without encoding replacement or rejection.
+Lengths are JavaScript UTF-16 lengths. Content and opaque keys are preserved
+exactly, including whitespace and Unicode; there is no trimming, case folding,
+or Unicode normalization. Tenant, author, and request ID come only from trusted
+context. Owners and members receive `project_notes:create`; viewers do not.
 
 Allowed categories:
 
@@ -727,7 +738,7 @@ follow_up
 research
 ```
 
-## Output
+## Application Output (M7-A)
 
 ```text
 note
@@ -738,10 +749,10 @@ note
   createdAt
 
 created
-
-meta
-  requestId
 ```
+
+`createdAt` is an ISO timestamp. The application result contains no `meta`;
+M7-B will add transport `meta.requestId` when the MCP tool is registered.
 
 `created` indicates:
 
@@ -778,13 +789,11 @@ The logical operation must be atomic:
 ```text
 verify project belongs to tenant
         ↓
-check existing idempotency key
+attempt note INSERT using the unique key
         ↓
-insert note
+new note: insert audit | duplicate: read committed note and compare payload
         ↓
-insert audit record
-        ↓
-commit
+commit (or roll back on any failure/conflict)
 ```
 
 If any step fails:
@@ -809,7 +818,22 @@ A safe retry with the same idempotency key returns the previous result.
 
 An idempotency-key collision representing a semantically different operation should produce `CONFLICT` rather than silently changing the previous operation.
 
-The exact comparison fields for detecting a conflicting reuse should be defined during implementation and covered by tests.
+Within the tenant/author/key scope, retries compare `projectId`, `category`, and
+`content` with exact equality. A different owned project, category, or content
+returns `CONFLICT`. Project ownership is checked before key lookup: missing or
+foreign projects return `NOT_FOUND`, even when a key already exists. Retries return
+the original note ID and creation time with `created=false` and do not add an
+audit record. Request ID is not part of the comparison.
+
+Project identity uses the verified project's canonical PostgreSQL UUID, so
+uppercase and lowercase UUID spellings resolve to the same operation. Category,
+content, and opaque key comparisons remain exact and case-sensitive.
+
+The PostgreSQL adapter uses `INSERT ... ON CONFLICT DO NOTHING` against the
+existing unique constraint, then a separate READ COMMITTED lookup after a losing
+insert. It does not update the original note or retry failed transactions
+automatically. After an uncertain transport outcome, callers may safely retry
+the exact command with the same key while still authorized.
 
 ## Failure Behavior
 
@@ -834,6 +858,13 @@ requestId = <request id>
 ```
 
 Metadata should contain only safe, useful fields.
+
+M7-A stores exactly `{ projectId, category }` as metadata, without note content or
+idempotency keys. Audit insertion occurs in the note transaction; an audit or
+commit failure rolls back both records. Existing historical notes are preserved
+without fabricated backfilled audits. The application result contains `note`
+and `created`; MCP `meta.requestId` will be added by the invocation boundary in
+M7-B.
 
 ---
 

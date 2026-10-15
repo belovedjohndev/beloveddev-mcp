@@ -497,9 +497,9 @@ If `audit_logs` has not yet been introduced, add it here with a migration.
 
 ```text
 project ownership check
-→ idempotency check
-→ note insert
-→ audit insert
+→ note insert using the unique constraint
+→ resolve committed duplicates and compare exact payload
+→ audit insert for new notes
 → commit
 ```
 
@@ -521,6 +521,36 @@ database failure does not partially commit
 ### Exit Criteria
 
 The system has demonstrated a safe, production-oriented MCP mutation.
+
+### Milestone 7-A — application and persistence (implemented)
+
+`CreateProjectNote` is an application command only. Its strict schema requires
+project UUID, category, nonblank content (1–10,000 UTF-16 units), and a nonblank
+opaque key (8–128 units), preserving text exactly. Owner/member permission checks
+precede validation and protected work. Tenant and author are trusted values.
+
+A dedicated PostgreSQL adapter verifies project ownership and creates the note
+and durable audit in one READ COMMITTED transaction. The existing unique key
+arbitrates concurrent insertion; matching retries return the original note and
+`created=false`, while project/category/content differences return `CONFLICT`.
+The additive audit migration binds tenant, note, and actor and constrains safe
+metadata. Write runtime credentials have append-only note/audit privileges.
+
+Tests cover strict input, authorization order, tenant and author identity,
+cross-tenant and unknown projects, exact retries, key conflicts across projects,
+independent tenant/author scopes, forced concurrent insert races, database/audit/
+commit rollback, safe retry after rollback, migration integrity, and privileges.
+Archived projects remain eligible for notes. Real PostgreSQL tests also verify
+author-membership enforcement and malformed-input rejection without writes.
+Concurrent tests use a five-second lock-barrier deadline, ten-second database
+statement timeouts, and the integration runner's twenty-second test timeout.
+They release the lock and await all attempts in cleanup before removing fixtures.
+
+### Milestone 7-B — MCP exposure (planned)
+
+Registration, mutation annotations, composition-root wiring, MCP invocation
+logging, and compiled stdio mutation coverage remain M7-B. `create_project_note`
+is not available through MCP in M7-A. Milestone 8 is not started.
 
 ---
 

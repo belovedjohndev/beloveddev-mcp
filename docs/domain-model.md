@@ -38,7 +38,8 @@ database invariant. Membership status and permissions are future application
 checks: making a membership inactive preserves historical notes, and does not
 make direct SQL an authorized mutation. Referenced memberships cannot be deleted.
 The unique key is exactly `(tenant_id, author_user_id, idempotency_key)`, across
-projects. Duplicate-result handling and transactional auditing remain Milestone 7.
+projects. Milestone 7-A adds exact retry comparison and transactional auditing;
+MCP exposure remains Milestone 7-B.
 Milestone 2 exposes read-only knowledge repositories, with no note mutation API
 or database trigger claiming append-only enforcement.
 
@@ -358,6 +359,16 @@ UNIQUE(
 
 This protects against duplicate agent or transport retries.
 
+Within that scope, `projectId`, `category`, and the exact stored content identify
+the operation. Content and opaque keys are not normalized. An identical retry
+returns the original note with `created=false`; differing payloads return
+`CONFLICT`. Authorization and tenant-scoped project verification precede retry
+handling. Only owners and members receive `project_notes:create`.
+
+Project IDs use the canonical UUID returned by the verified project lookup;
+UUID letter case does not change project identity or turn an identical retry
+into a conflict. Content and category still require exact equality.
+
 ## 10. ProjectBlocker
 
 Represents an unresolved or resolved issue that prevents or materially delays project progress.
@@ -613,6 +624,14 @@ Every evaluation must still include an `evaluationVersion`.
 ## 13. AuditLog
 
 Represents an immutable audit record for a state-changing operation.
+
+M7-A implements only `project_note.created` / `project_note`. The audit foreign
+key binds tenant, note ID, and actor to the created note and its author; a unique
+tenant/action/resource key permits at most one creation audit. Metadata contains
+only project ID and category. Runtime permissions permit insertion but no
+update, delete, truncation, or audit reads. Migration administrators retain
+administrative access; this is not a tamper-proof audit system against database
+owners. No historical notes are backfilled.
 
 ### Fields
 

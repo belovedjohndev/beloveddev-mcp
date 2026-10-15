@@ -2,7 +2,11 @@ import type { MembershipRole } from '@beloveddev/domain/entities';
 import { ApplicationError } from './application-error.js';
 
 export type Permission =
-  'profile:read' | 'projects:read' | 'opportunities:read' | 'opportunities:evaluate';
+  | 'profile:read'
+  | 'projects:read'
+  | 'opportunities:read'
+  | 'opportunities:evaluate'
+  | 'project_notes:create';
 
 export interface RequestContext {
   readonly requestId: string;
@@ -23,13 +27,14 @@ const readPermissions: readonly Permission[] = Object.freeze([
   'projects:read',
   'opportunities:read',
 ]);
-const evaluationPermissions: readonly Permission[] = Object.freeze([
+const ownerMemberPermissions: readonly Permission[] = Object.freeze([
   ...readPermissions,
   'opportunities:evaluate',
+  'project_notes:create',
 ]);
 const rolePermissions: Record<MembershipRole, readonly Permission[]> = {
-  owner: evaluationPermissions,
-  member: evaluationPermissions,
+  owner: ownerMemberPermissions,
+  member: ownerMemberPermissions,
   viewer: readPermissions,
 };
 

@@ -40,6 +40,10 @@
       "types": "./dist/postgres/note-repository.d.ts",
       "import": "./dist/postgres/note-repository.js"
     },
+    "./postgres/project-note-creation-repository": {
+      "types": "./dist/postgres/project-note-creation-repository.d.ts",
+      "import": "./dist/postgres/project-note-creation-repository.js"
+    },
     "./postgres/opportunity-repository": {
       "types": "./dist/postgres/opportunity-repository.d.ts",
       "import": "./dist/postgres/opportunity-repository.js"

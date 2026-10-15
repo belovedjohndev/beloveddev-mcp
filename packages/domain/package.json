@@ -8,6 +8,10 @@
       "types": "./dist/entities.d.ts",
       "default": "./dist/entities.js"
     },
+    "./project-note": {
+      "types": "./dist/project-note.d.ts",
+      "default": "./dist/project-note.js"
+    },
     "./evaluation-policy-v1": {
       "types": "./dist/evaluation-policy-v1.d.ts",
       "default": "./dist/evaluation-policy-v1.js"

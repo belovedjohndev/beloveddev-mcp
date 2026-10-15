@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { migrateDatabase } from '@beloveddev/database/migrate';
 import {
+  auditLogs,
   clients,
   developerProfiles,
   opportunities,
@@ -28,6 +29,7 @@ import { getTableConfig } from 'drizzle-orm/pg-core';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const tables = [
+  auditLogs,
   tenants,
   users,
   tenantMemberships,
@@ -90,12 +92,13 @@ describe('real PostgreSQL migration and constraints', () => {
     await database?.close();
   });
 
-  it('applies to an empty database, creates exactly ten tables, and can run again safely', async () => {
+  it('applies to an empty database, creates exactly eleven tables, and can run again safely', async () => {
     expect(initiallyEmpty).toBe(true);
     const result = await database.admin.pool.query<{ table_name: string }>(
       "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name",
     );
     expect(result.rows.map((row) => row.table_name)).toEqual([
+      'audit_logs',
       'clients',
       'developer_profiles',
       'opportunities',
@@ -111,7 +114,7 @@ describe('real PostgreSQL migration and constraints', () => {
     const journal = await database.admin.pool.query<{ count: number }>(
       'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
     );
-    expect(journal.rows).toEqual([{ count: 4 }]);
+    expect(journal.rows).toEqual([{ count: 5 }]);
   });
 
   it.each(tables.map((table) => [getTableConfig(table).name, table] as const))(
@@ -227,7 +230,7 @@ describe('real PostgreSQL migration and constraints', () => {
       const journalRows = await upgraded.admin.pool.query<{ count: number }>(
         'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
       );
-      expect(journalRows.rows).toEqual([{ count: 4 }]);
+      expect(journalRows.rows).toEqual([{ count: 5 }]);
     } finally {
       await upgraded?.close();
       // Remove only the known files in this test's uniquely created directory.
@@ -242,6 +245,7 @@ describe('real PostgreSQL migration and constraints', () => {
     const folder = await mkdtemp(join(tmpdir(), 'beloveddev-m3-upgrade-'));
     let upgraded: TestDatabase | undefined;
     let evidenceId = '';
+    let originalNotes: unknown[] = [];
     try {
       await mkdir(join(folder, 'meta'));
       const journal = JSON.parse(
@@ -260,6 +264,8 @@ describe('real PostgreSQL migration and constraints', () => {
           await migrate(connection.db, { migrationsFolder: folder });
           const seededTenants = await seedTwoTenants(connection.db);
           const knowledge = await seedProjectKnowledge(connection.db, seededTenants);
+          originalNotes = (await connection.pool.query('SELECT * FROM project_notes ORDER BY id'))
+            .rows;
           evidenceId = knowledge.a.evidenceId;
           const absent = await connection.pool.query<{ name: string | null }>(
             "SELECT column_name AS name FROM information_schema.columns WHERE table_schema='public' AND table_name='project_evidence' AND column_name='search_vector'",
@@ -272,6 +278,10 @@ describe('real PostgreSQL migration and constraints', () => {
         [evidenceId],
       );
       expect(evidence.rows).toEqual([{ id: evidenceId, searchable: true }]);
+      expect(
+        (await upgraded.admin.pool.query('SELECT * FROM project_notes ORDER BY id')).rows,
+      ).toEqual(originalNotes);
+      expect((await upgraded.admin.pool.query('SELECT * FROM audit_logs')).rows).toEqual([]);
       const index = await upgraded.admin.pool.query<{ indexdef: string }>(
         "SELECT indexdef FROM pg_indexes WHERE schemaname='public' AND indexname='project_evidence_search_vector_idx'",
       );
@@ -279,7 +289,7 @@ describe('real PostgreSQL migration and constraints', () => {
       const journalRows = await upgraded.admin.pool.query<{ count: number }>(
         'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
       );
-      expect(journalRows.rows).toEqual([{ count: 4 }]);
+      expect(journalRows.rows).toEqual([{ count: 5 }]);
     } finally {
       await upgraded?.close();
       for (const migration of ['0000_tenancy_foundation.sql', '0001_project_knowledge.sql'])
@@ -334,7 +344,7 @@ describe('real PostgreSQL migration and constraints', () => {
       const journalRows = await upgraded.admin.pool.query<{ count: number }>(
         'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
       );
-      expect(journalRows.rows).toEqual([{ count: 4 }]);
+      expect(journalRows.rows).toEqual([{ count: 5 }]);
     } finally {
       await upgraded?.close();
       for (const migration of migrations)

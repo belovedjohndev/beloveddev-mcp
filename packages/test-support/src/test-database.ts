@@ -4,7 +4,10 @@ import { migrateDatabase } from '@beloveddev/database/migrate';
 
 export async function createTestDatabase(
   administratorUrl: string,
-  options: { beforeMigrate?: (connection: DatabaseConnection) => Promise<void> } = {},
+  options: {
+    beforeMigrate?: (connection: DatabaseConnection) => Promise<void>;
+    projectNoteWrites?: boolean;
+  } = {},
 ) {
   const suffix = randomUUID().replaceAll('-', '');
   const databaseName = `beloveddev_test_${suffix}`;
@@ -62,6 +65,9 @@ export async function createTestDatabase(
     );
     await admin.pool.query(`GRANT SELECT (id, status) ON tenants, users TO "${roleName}"`);
     await admin.pool.query(`GRANT INSERT ON projects TO "${roleName}"`);
+    if (options.projectNoteWrites) {
+      await admin.pool.query(`GRANT INSERT ON project_notes, audit_logs TO "${roleName}"`);
+    }
     url.username = roleName;
     url.password = password;
     url.searchParams.delete('user');

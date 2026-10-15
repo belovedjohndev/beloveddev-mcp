@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Database } from '@beloveddev/database/client';
 import {
+  auditLogs,
   clients,
   developerProfiles,
   opportunities,
@@ -98,6 +99,7 @@ export async function removeTenantFixtures(database: Database, fixture: TenantFi
   const tenantIds = [fixture.a.tenantId, fixture.b.tenantId];
   const userIds = [fixture.a.userId, fixture.b.userId];
   await database.transaction(async (transaction) => {
+    await transaction.delete(auditLogs).where(inArray(auditLogs.tenantId, tenantIds));
     await transaction.delete(opportunities).where(inArray(opportunities.tenantId, tenantIds));
     await transaction.delete(projectNotes).where(inArray(projectNotes.tenantId, tenantIds));
     await transaction.delete(projectBlockers).where(inArray(projectBlockers.tenantId, tenantIds));

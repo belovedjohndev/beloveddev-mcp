@@ -106,15 +106,38 @@ Notes reference the global author user and have a composite foreign key from
 `(tenant_id, author_user_id)` to `tenant_memberships(tenant_id, user_id)`.
 Membership existence is a stable ownership invariant and belongs in PostgreSQL,
 avoiding a check-then-insert race. Membership activity and permissions depend on
-trusted request context and belong in the future application mutation.
+trusted request context and are enforced by the M7-A application command.
 Inactive memberships can retain history; referenced memberships cannot be deleted.
 The database alone does not authorize note creation.
 
 `UNIQUE(tenant_id, author_user_id, idempotency_key)` applies across projects.
-Different authors or tenants may reuse a key. No note write repository, retry
-result handling, auditing, or update/delete API is added. The runtime test role
-has only SELECT privileges on the three knowledge tables; there is no append-only
-trigger preventing administrative updates.
+Different authors or tenants may reuse a key. M7-A adds a dedicated transaction
+adapter for note creation, exact retries, and durable auditing. Read-only suites
+retain SELECT-only knowledge access; note-write suites explicitly opt into INSERT
+on notes/audits. There is no append-only trigger preventing administrative updates.
+
+## M7-A audit storage and transaction
+
+Migration `0004_project_note_audit` adds `audit_logs` without changing applied
+migrations or existing note rows. A composite unique key on note tenant/ID/author
+supports an audit foreign key binding all three fields. Existing IDs already
+guarantee uniqueness; building the supporting index still takes a table lock and
+should be scheduled for a populated deployment.
+
+The audit table records UUID identity, tenant, actor, resource, request ID, action,
+resource type, safe JSONB metadata, and a database timestamp. Only note creation
+is supported in this slice. Checks restrict action/type and metadata to exactly
+the project/category fields. The tenant/action/resource unique constraint prevents
+duplicate creation audits. Historical notes remain unchanged with no invented
+audit history.
+
+The adapter uses an explicit READ COMMITTED transaction for project verification,
+`INSERT ... ON CONFLICT DO NOTHING`, retry lookup, and audit insertion. The unique
+index serializes competing keys; a separate statement observes the committed
+winner after a blocked insert. Exact project/category/content comparison decides
+retry versus conflict. New notes and audits commit together, including failures
+raised at deferred-constraint/commit time. The adapter never updates or deletes
+either record and never automatically retries a failed transaction.
 
 Indexes follow the implemented reads:
 
@@ -280,13 +303,23 @@ CREATE ROLE beloveddev_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPAS
 \password beloveddev_runtime
 GRANT USAGE ON SCHEMA public TO beloveddev_runtime;
 GRANT SELECT ON tenant_memberships, developer_profiles, clients, projects,
-  project_evidence, project_blockers, project_notes TO beloveddev_runtime;
-GRANT INSERT ON projects TO beloveddev_runtime;
+  project_evidence, project_blockers, project_notes, opportunities TO beloveddev_runtime;
+GRANT SELECT (id, status) ON tenants, users TO beloveddev_runtime;
+-- Only for a process invoking the M7-A application command:
+GRANT INSERT ON project_notes, audit_logs TO beloveddev_runtime;
 ```
 
-Supply that role's credentials to the future application, and keep the owner
-credentials for migrations. The current test helper provisions equivalent
-restricted runtime permissions and verifies them.
+Use a fresh non-owner role with no inherited write grants; do not grant UPDATE,
+DELETE, TRUNCATE, schema CREATE, unrelated INSERT, or SELECT on audit_logs.
+Supply its credentials to the application and keep owner credentials for
+migrations. Existing installations should retain grants required by earlier
+operations; note creation itself does not require INSERT on projects.
+The test helper's `projectNoteWrites` option adds note/audit INSERT while preserving
+earlier grants, including the internal project creation primitive. The note-write
+suite explicitly revokes project INSERT to verify this command's narrower needs.
+The option defaults off; existing stdio smoke tests keep read-only
+credentials and no note/audit INSERT grants. Grants remain deployment provisioning
+instructions, not environment-specific schema migrations.
 
 ## Real PostgreSQL integration tests
 

@@ -5,7 +5,7 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 6-B
+## Current status: Milestone 7-A
 
 The stdio MCP server exposes seven read-only tools backed by tenant-scoped
 PostgreSQL repositories: `get_profile`, `list_projects`, `get_project`,
@@ -17,8 +17,14 @@ Opportunity listing uses exact structured filters, a literal cross-field query,
 and signed deterministic keyset pagination. Opportunity evaluation reuses the
 versioned domain policy and bounded evidence search; budget compatibility remains
 null because profile currency is not modeled. Owners and members can evaluate;
-viewers can list opportunities. Evaluation is derived and read-only. The audited
-note mutation remains a later milestone.
+viewers can list opportunities. Evaluation is derived and read-only. MCP exposure
+of note creation remains a later milestone.
+
+Milestone 7-A implements `CreateProjectNote` in the application and PostgreSQL
+layers, with owner/member authorization, tenant-scoped project checks, exact
+idempotent retries, and atomic note/audit insertion. Strict input accepts only
+project ID, category, content, and an opaque idempotency key. The note mutation
+is not registered with MCP; its interface wiring remains Milestone 7-B.
 
 ## Requirements
 
@@ -179,8 +185,8 @@ constraints, cleanup behavior, and Drizzle compatibility notes.
 - [Implementation plan](docs/implementation-plan.md)
 - [Agent instructions](AGENTS.md)
 
-Seven of the eight planned V1 tools are implemented. The audited idempotent note
-mutation remains planned.
+Seven of the eight planned V1 tools are implemented. MCP exposure of the audited,
+idempotent note command remains planned.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
 [PostgreSQL image initialization and storage](https://hub.docker.com/_/postgres),
