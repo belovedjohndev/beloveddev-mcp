@@ -1,10 +1,21 @@
 # BelovedDev MCP V1 — Architecture
 
-## Implemented architecture through Milestone 7-B
+## Implemented architecture through Milestone 8-B
 
 The stdio executable composes trusted local request context, application use
 cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
 logging. Database setup remains an explicit migration CLI action.
+
+M8-B documents and verifies direct Node execution of the compiled composition
+root: `node --env-file=.env apps/mcp-server/dist/main.js` from the repository root.
+MCP clients use absolute paths for Node, the required env file, and the compiled
+entry point, so launch does not depend on their working directory. There is no
+npm wrapper or automatic discovery of other `.env` files. Node rejects a missing
+explicit env file before startup; application configuration failures are logged
+safely to stderr. Existing process environment values override file values.
+PostgreSQL stdio regressions execute the README command and the absolute-path
+variant, initialize MCP, discover all eight tools, and validate every stdout line
+as protocol traffic. Bootstrap regressions cover safe configuration failures.
 
 The domain package defines portable records, status values, and the pure
 `EvaluationPolicyV1`; the application package defines explicit ports and
@@ -386,13 +397,41 @@ constraints apply to direct SQL as well as future application writes.
 
 ## 9. Authentication
 
-The exact production identity provider is not part of V1 specification yet.
+The production authentication/deployment profile is not specified yet. V1 does
+not require a remote HTTP service or an identity provider merely to support stdio.
 
 The architecture should depend on an authentication abstraction that produces an authenticated principal.
 
 Do not build a custom password/authentication system merely to unblock MCP development.
 
 For local development, a clearly isolated development authentication adapter may be used if necessary, but it must not be confused with a production security model.
+
+The implemented local stdio profile trusts the MCP host, launcher, OS account,
+installed code, and operator-controlled environment/configuration files. One
+process acts for one configured tenant/user pair. Those IDs are operator
+assertions, not independent authentication; a compromised launcher can change
+the environment and select another active principal. The
+membership adapter rechecks active tenant, user, and membership on each call and
+derives permissions from the stored role. Tool arguments cannot establish that
+identity. Protect local configuration and database credentials using OS access
+controls, restricted runtime grants, and a trusted host; there is no RLS defense
+against arbitrary SQL using compromised credentials.
+
+The MCP client owns subprocess startup and shutdown. Closing stdin, SIGINT, or
+SIGTERM triggers transport/pool cleanup; a terminal operator can use Ctrl+C.
+There is no enforced shutdown deadline or guarantee that disconnect cancels or
+rolls back an in-flight mutation. Those reliability limits remain separate
+hardening work. Protect env files with OS account/file permissions and keep
+administrator/migration credentials separate from the restricted runtime role.
+
+M8-B documents this boundary without approving local authentication for production.
+Only `MCP_AUTH_MODE=local` exists, and `NODE_ENV=production` still rejects it.
+Running the launcher successfully does not prove production security. Do not
+expose the fixed-principal process as a remote multi-user service. Such a service
+requires an independently approved transport/authentication design; no HTTP,
+OAuth, identity provider, or production-mode exception is added in this slice.
+Local stdio needs neither an HTTP listener nor OAuth. Completing M8-B does not
+complete Milestone 8 or remove its remaining production-readiness blockers.
 
 ## 10. Validation
 

@@ -5,7 +5,7 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 7-B
+## Current status: Milestone 8-B
 
 The stdio MCP server exposes eight tools backed by tenant-scoped
 PostgreSQL repositories. The tools `get_profile`, `list_projects`, `get_project`,
@@ -32,7 +32,7 @@ see [runtime grant requirements](docs/database.md).
 ## Requirements
 
 - Node.js 24 (at least 24.12.0); `.nvmrc` selects the supported major.
-- npm 11; the lockfile is committed for reproducible installs.
+- npm 11 (`packageManager` pins 11.6.2); the lockfile is committed for reproducible installs.
 - Docker Engine/Desktop with Docker Compose v2 or later, using Linux containers.
 
 ## Local setup
@@ -46,7 +46,8 @@ Run commands from the repository root.
 3. Start PostgreSQL: `npm run db:up`.
 4. Apply the migration chain: `npm run db:migrate`.
 5. Check everything, including real PostgreSQL tests: `npm run verify:all`.
-6. Run the compiled MCP stdio server: `npm start`.
+6. Launch the compiled server directly with Node using the instructions below:
+   `node --env-file=.env apps/mcp-server/dist/main.js`.
 
 If port 5432 is already occupied, choose a free port in `POSTGRES_PORT` and
 update `DATABASE_URL` and `TEST_DATABASE_URL` to match before starting Compose.
@@ -55,9 +56,85 @@ Docker for an available host port.
 
 A valid configuration starts the MCP stdio transport and writes structured logs
 to stderr. Stdout is reserved exclusively for JSON-RPC protocol traffic. Invalid
-configuration produces a safe JSON error on stderr and exits with code 1.
+application configuration produces a safe JSON error on stderr and exits with code 1.
+If the explicitly selected env file is missing, Node fails before application
+startup and writes its diagnostic to stderr without exposing environment contents.
 `LOG_LEVEL=silent` suppresses successful startup and invocation logs;
 configuration errors still log.
+
+## Direct Node MCP launcher
+
+Build the workspace before launching (`npm run build`, also included in
+`verify:all`). The supported terminal command from the repository root is:
+
+<!-- mcp-client-command -->
+
+```sh
+node --env-file=.env apps/mcp-server/dist/main.js
+```
+
+Node executes the compiled composition root directly. This command requires the
+selected `.env` file to exist; it does not silently skip missing configuration.
+It does not spawn npm, build packages, run migrations, or discover other env files.
+
+For MCP client configuration, use absolute paths for the Node executable, the
+operator-owned environment file, and the compiled entry point. Replace these
+example paths with the actual installed locations:
+
+```json
+{
+  "command": "C:/Program Files/nodejs/node.exe",
+  "args": [
+    "--env-file=C:/private/BelovedDev MCP/server.env",
+    "C:/installed/BelovedDev MCP/apps/mcp-server/dist/main.js"
+  ]
+}
+```
+
+On POSIX systems, use absolute paths such as `/usr/bin/node` and
+`/srv/BelovedDev MCP/apps/mcp-server/dist/main.js`. Use forward slashes such as
+`C:/...` for Windows paths in JSON. Each argument is one string; do not add shell
+quote characters around paths containing spaces. The client must invoke Node
+directly, without a shell or npm lifecycle wrapper.
+Existing process environment values take precedence over env-file values.
+A relative `--env-file` path is intentionally relative to the caller's working
+directory; absolute paths avoid that dependency.
+
+`npm start` remains a terminal convenience that requires the repository `.env`.
+Do not configure an MCP client to launch npm: its lifecycle banner writes to
+stdout. The supported client launch path is direct Node, with stdout reserved
+for MCP protocol messages and application logs on stderr.
+
+## Local stdio trust boundary
+
+M8-B supports an operator-controlled local stdio subprocess. The MCP host, launcher, OS account,
+installed code, and environment/env file are trusted. Protect configuration and
+credentials with OS file/account permissions, and use a restricted database
+runtime role. Do not share the process or its configuration with untrusted local
+users, code, or agents. A process serving one configured principal must not be
+used as an unauthenticated bridge for remote users.
+
+`MCP_LOCAL_TENANT_ID` and `MCP_LOCAL_USER_ID` are operator assertions, not proof of
+identity from credentials; local identity is not independent authentication.
+A compromised launcher can alter the configured identity and select another
+active principal. Both identifiers must be configured together;
+if both are absent, application tool calls are unauthenticated. The server
+rechecks active tenant/user/membership and derives permissions from the stored
+role on every invocation. Model-controlled tool arguments cannot supply trusted
+identity, tenant, role, or permissions.
+
+Local process startup does not establish production authentication security.
+`MCP_AUTH_MODE=local` remains the only implemented mode and is rejected with
+`NODE_ENV=production`; remote/unsupported modes also fail closed. M8-B does not
+relax that guard or add HTTP, OAuth, or an identity provider. Remote multi-user
+hosting requires a separately approved deployment and authentication design.
+Local stdio requires no HTTP listener or OAuth.
+
+The MCP client controls the subprocess lifecycle. Stop it through the client's
+disconnect/stop action, which should close stdin or terminate the child. In a
+terminal, use Ctrl+C; the server handles SIGINT, SIGTERM, and stdin EOF by closing
+the transport and database pool. Shutdown has no enforced deadline; disconnect
+does not guarantee cancellation or rollback of an in-flight mutation.
 
 ## Commands
 
@@ -77,7 +154,7 @@ configuration errors still log.
 | `npm run db:generate`      | Generate reviewed Drizzle SQL migrations and metadata                        |
 | `npm run db:check`         | Validate Drizzle migration history                                           |
 | `npm run db:migrate`       | Apply committed migrations using DATABASE_URL                                |
-| `npm start`                | Run the compiled bootstrap; build first                                      |
+| `npm start`                | Terminal convenience only; MCP clients must use the direct Node launcher     |
 | `npm run db:up`            | Start PostgreSQL and wait for its health check                               |
 | `npm run db:down`          | Stop PostgreSQL, retaining the data volume                                   |
 | `npm run db:logs`          | Follow PostgreSQL logs                                                       |
@@ -113,20 +190,20 @@ of Drizzle and concrete adapters.
 
 ## Configuration
 
-| Variable              | Default                        | Purpose                                                                     |
-| --------------------- | ------------------------------ | --------------------------------------------------------------------------- |
-| `NODE_ENV`            | `development`                  | `development`, `test`, or `production`                                      |
-| `LOG_LEVEL`           | `info`                         | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, or `silent`             |
-| `DATABASE_URL`        | Required                       | PostgreSQL URL with a host and database name                                |
-| `MCP_AUTH_MODE`       | Required                       | `local`; rejected in production until a production identity provider exists |
-| `MCP_CURSOR_SECRET`   | Required                       | Cursor HMAC secret, 32–1024 characters                                      |
-| `MCP_LOCAL_TENANT_ID` | Optional                       | Trusted local operator tenant UUID; requires `MCP_LOCAL_USER_ID`            |
-| `MCP_LOCAL_USER_ID`   | Optional                       | Trusted local operator user UUID; requires `MCP_LOCAL_TENANT_ID`            |
-| `TEST_DATABASE_URL`   | Required for integration tests | Dedicated test-instance admin connection; never falls back to DATABASE_URL  |
-| `POSTGRES_USER`       | Required by Compose            | Local database administrator                                                |
-| `POSTGRES_PASSWORD`   | Required by Compose            | Local database password                                                     |
-| `POSTGRES_DB`         | Required by Compose            | Local database name                                                         |
-| `POSTGRES_PORT`       | `5432`                         | Host port, bound to `127.0.0.1`                                             |
+| Variable              | Default                        | Purpose                                                                    |
+| --------------------- | ------------------------------ | -------------------------------------------------------------------------- |
+| `NODE_ENV`            | `development`                  | `development`, `test`, or `production`                                     |
+| `LOG_LEVEL`           | `info`                         | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, or `silent`            |
+| `DATABASE_URL`        | Required                       | PostgreSQL URL with a host and database name                               |
+| `MCP_AUTH_MODE`       | Required                       | `local`; rejected in production pending an approved authentication profile |
+| `MCP_CURSOR_SECRET`   | Required                       | Cursor HMAC secret, 32–1024 characters                                     |
+| `MCP_LOCAL_TENANT_ID` | Optional                       | Trusted local operator tenant UUID; requires `MCP_LOCAL_USER_ID`           |
+| `MCP_LOCAL_USER_ID`   | Optional                       | Trusted local operator user UUID; requires `MCP_LOCAL_TENANT_ID`           |
+| `TEST_DATABASE_URL`   | Required for integration tests | Dedicated test-instance admin connection; never falls back to DATABASE_URL |
+| `POSTGRES_USER`       | Required by Compose            | Local database administrator                                               |
+| `POSTGRES_PASSWORD`   | Required by Compose            | Local database password                                                    |
+| `POSTGRES_DB`         | Required by Compose            | Local database name                                                        |
+| `POSTGRES_PORT`       | `5432`                         | Host port, bound to `127.0.0.1`                                            |
 
 `DATABASE_URL` validation checks URL structure, not connectivity. Both `postgres:`
 and `postgresql:` schemes are accepted. Keep the URL aligned with Compose settings;
@@ -159,6 +236,14 @@ runtime credentials. Do not reuse this Compose setup as production deployment co
 Changing initialization credentials does not update an existing database volume.
 `npm run db:down` preserves data; deleting the volume destroys it.
 
+Use separate administrator/migration credentials and runtime credentials. The
+runtime role needs only the documented SELECT grants and INSERT on `project_notes`
+and `audit_logs`; it should not own tables or receive migration, UPDATE, or DELETE
+privileges. Tenant isolation relies on application authorization and scoped SQL.
+There are no RLS policies protecting runtime database credentials: compromised
+credentials can access granted tables across tenants. Protect the env file,
+credential injection, and local account accordingly.
+
 Repositories require trusted tenant scope in SQL. The local request-context
 adapter rechecks active tenant, user, and membership state on every invocation;
 MCP arguments cannot establish identity or choose a tenant. Read use cases enforce
@@ -166,8 +251,8 @@ MCP arguments cannot establish identity or choose a tenant. Read use cases enfor
 `opportunities:evaluate` before protected repository access. Evaluation permits
 owners and members and denies viewers. Foreign opportunity IDs return `NOT_FOUND`. Foreign
 project filters return no search results. Composite foreign keys enforce project
-ownership. Local mode is intentionally unavailable in production until a
-production identity provider is implemented.
+ownership. Local mode remains unavailable with `NODE_ENV=production`; this
+launcher slice does not introduce a supported production authentication profile.
 
 Note creation requires `project_notes:create` for owners/members. Tenant, author,
 and request ID come only from trusted context; foreign and missing projects are
@@ -193,8 +278,12 @@ constraints, cleanup behavior, and Drizzle compatibility notes.
 - [Implementation plan](docs/implementation-plan.md)
 - [Agent instructions](AGENTS.md)
 
-All eight planned V1 tools are implemented through Milestone 7-B. Milestone 8
-production hardening remains outside this slice.
+All eight planned V1 tools are implemented through Milestone 7-B. M8-B adds the
+documented local trust boundary and protocol-safe launcher. Further Milestone 8
+hardening remains unfinished; this slice is not a production-readiness claim.
+Known blockers include an approved production authentication profile, bounded
+connection/query/shutdown behavior, operational readiness and failure testing,
+release packaging, and a tested backup/recovery and migration deployment process.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
 [PostgreSQL image initialization and storage](https://hub.docker.com/_/postgres),

@@ -561,7 +561,7 @@ and log privacy. Compiled PostgreSQL stdio tests verify creation, idempotent ret
 tenant isolation, live authorization changes, conflicts, atomic rollback,
 concurrent duplicate/conflicting sessions, audit correlation, restricted runtime
 credentials, and protocol-only stdout. All seven read-only tools retain their
-existing behavior and regression tests. Milestone 8 is not started.
+existing behavior and regression tests. Subsequent hardening is tracked below.
 
 ---
 
@@ -589,6 +589,42 @@ Prepare V1 for reliable deployment and portfolio review.
 ### Exit Criteria
 
 The server has documented startup, deployment, failure, migration, and shutdown behavior.
+
+### Milestone 8-A — Read-only readiness audit (complete)
+
+The source audit distinguished an operator-controlled local stdio process from
+a remote multi-user service. V1 does not require HTTP or an identity provider.
+Production authentication remains unsupported and fail-closed. Lifecycle,
+readiness, resource bounds, packaging, recovery, and operational assurance remain
+separate hardening work; a working local launcher does not satisfy those gates.
+
+### Milestone 8-B — Local trust boundary and launcher (implemented)
+
+`node --env-file=.env apps/mcp-server/dist/main.js` launches the compiled MCP server
+directly from the repository root, without npm lifecycle output. MCP clients
+configure absolute Node executable, env-file, and compiled entry-point paths;
+these work from another directory and support spaces. The selected env file is
+required: Node fails on stderr before bootstrap if it is missing. Other ambient
+env files are not discovered. The README documents the exact command,
+environment precedence, and trust in the operator's OS account, launcher, host,
+protected configuration, and client-managed subprocess lifecycle. Configured
+identity is an operator assertion rather than independent authentication;
+membership is revalidated, and runtime database credentials have no RLS protection.
+
+Executable PostgreSQL regressions read and run the documented command, initialize
+MCP, discover all eight tools, validate every stdout message, and check structured
+logs on stderr. They exercise absolute paths and explicit env files with spaces
+from another working directory and reject identity in tool arguments. Bootstrap
+tests retain production/unsupported-auth rejection and cover missing env files,
+missing settings, and environment precedence. Existing real PostgreSQL stdio
+tests use the absolute compiled entry point from another working directory.
+Application rules, permissions,
+schemas, persistence, transaction behavior, and idempotency are unchanged.
+No subsequent M8 hardening slice, remote transport, or identity provider is included.
+Milestone 8 remains incomplete: bounded lifecycle/resource behavior, operational
+readiness, release packaging, and backup/recovery and migration deployment
+procedures remain open. Production authentication requires a separate owner
+decision; local stdio is not a production-authentication bypass.
 
 ---
 

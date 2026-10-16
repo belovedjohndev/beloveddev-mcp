@@ -1,5 +1,16 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmdirSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -23,7 +34,8 @@ import {
 import { seedOpportunity } from '@beloveddev/test-support/opportunity-fixtures';
 import { safeErrorSchema, toolSchemas } from '../src/schemas.js';
 
-const main = fileURLToPath(new URL('../../../apps/mcp-server/dist/main.js', import.meta.url));
+const workspace = fileURLToPath(new URL('../../../', import.meta.url));
+const entrypoint = fileURLToPath(new URL('../../../apps/mcp-server/dist/main.js', import.meta.url));
 const secret = 'private-stdio-test-signing-key-at-least-32-bytes';
 const logSchema = z.object({
   event: z.string(),
@@ -58,8 +70,16 @@ const responseSchema = z.object({
   error: z.object({ code: z.number(), message: z.string() }).optional(),
 });
 type Response = z.infer<typeof responseSchema>;
-function rawServer(env: Record<string, string>) {
-  const child = spawn(process.execPath, [main], { env, stdio: 'pipe', windowsHide: true });
+function rawServer(
+  env: Record<string, string>,
+  launch: { command?: string; args?: string[]; cwd?: string } = {},
+) {
+  const child = spawn(launch.command ?? process.execPath, launch.args ?? [entrypoint], {
+    cwd: launch.cwd ?? tmpdir(),
+    env,
+    stdio: 'pipe',
+    windowsHide: true,
+  });
   const lines = createInterface({ input: child.stdout });
   const failures: unknown[] = [];
   const output: string[] = [];
@@ -254,7 +274,8 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
       const client = new Client({ name: 'stdio-smoke', version: '1.0.0' });
       const transport = new StdioClientTransport({
         command: process.execPath,
-        args: [main],
+        args: [entrypoint],
+        cwd: tmpdir(),
         env: environment(identity),
         stderr: 'pipe',
       });
@@ -523,7 +544,8 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
     const client = new Client({ name: 'evaluation-missing-profile', version: '1.0.0' });
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [main],
+      args: [entrypoint],
+      cwd: tmpdir(),
       env: environment(identity),
       stderr: 'pipe',
     });
@@ -559,6 +581,115 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
     expect(stderr).not.toContain(secret);
     expect(stderr).not.toContain(database.runtimeUrl);
   });
+
+  it.each(['repository-root', 'absolute-path'] as const)(
+    'keeps the documented %s launcher protocol-only with explicit configuration',
+    async (mode) => {
+      const directory = mkdtempSync(join(tmpdir(), 'beloveddev compiled launch '));
+      const envPath = join(directory, '.env');
+      const appsLink = join(directory, 'apps');
+      let server: ReturnType<typeof rawServer> | undefined;
+      try {
+        writeFileSync(
+          envPath,
+          [
+            'NODE_ENV=test',
+            'LOG_LEVEL=info',
+            `DATABASE_URL=${database.runtimeUrl}`,
+            'MCP_AUTH_MODE=local',
+            `MCP_CURSOR_SECRET=${secret}`,
+            `MCP_LOCAL_TENANT_ID=${tenants.a.tenantId}`,
+            `MCP_LOCAL_USER_ID=${tenants.a.userId}`,
+          ].join('\n'),
+          { mode: 0o600 },
+        );
+        // Exercise the literal root command without reading or changing the operator's .env.
+        symlinkSync(join(workspace, 'apps'), appsLink, 'junction');
+        if (mode === 'repository-root') {
+          const readme = readFileSync(join(workspace, 'README.md'), 'utf8');
+          const commandLine = /<!-- mcp-client-command -->\s*```sh\r?\n([^\r\n]+)\r?\n```/u.exec(
+            readme,
+          )?.[1];
+          const [command, ...args] = (commandLine ?? '').split(' ');
+          expect(command).toBe('node');
+          expect(args).toEqual(['--env-file=.env', 'apps/mcp-server/dist/main.js']);
+          if (command === undefined) throw new Error('Missing documented launcher');
+          server = rawServer(getDefaultEnvironment(), { command, args, cwd: directory });
+        } else {
+          server = rawServer(getDefaultEnvironment(), {
+            command: process.execPath,
+            args: [`--env-file=${envPath}`, entrypoint],
+            cwd: tmpdir(),
+          });
+        }
+        const initialized = await server.request('initialize', {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'documented-launcher', version: '1.0.0' },
+        });
+        expect(initialized.error).toBeUndefined();
+        server.notify('notifications/initialized');
+        const listed = await server.request('tools/list');
+        expect(listed.error).toBeUndefined();
+        const { tools } = z
+          .object({ tools: z.array(z.object({ name: z.string() })) })
+          .parse(listed.result);
+        expect(tools.map((tool) => tool.name)).toEqual([
+          'get_profile',
+          'list_projects',
+          'get_project',
+          'search_project_evidence',
+          'get_blockers',
+          'list_opportunities',
+          'evaluate_opportunity',
+          'create_project_note',
+        ]);
+        const profile = await server.request('tools/call', { name: 'get_profile', arguments: {} });
+        expect(profile.error).toBeUndefined();
+        const result = z
+          .object({
+            content: z.array(z.object({ type: z.literal('text'), text: z.string() })),
+            structuredContent: toolSchemas.get_profile.output,
+          })
+          .parse(profile.result);
+        expect(JSON.parse(result.content[0]?.text ?? '')).toEqual(result.structuredContent);
+        const spoof = await server.request('tools/call', {
+          name: 'get_profile',
+          arguments: { tenantId: tenants.b.tenantId, userId: tenants.b.userId },
+        });
+        expect(spoof.error).toBeUndefined();
+        expect(spoof.result).toMatchObject({ isError: true });
+        expect(spoof.result).not.toHaveProperty('structuredContent');
+      } finally {
+        try {
+          if (server !== undefined) expect(await server.close()).toBe(0);
+        } finally {
+          // Unlink only the junction itself; never recurse into the real repository.
+          if (existsSync(appsLink)) unlinkSync(appsLink);
+          if (existsSync(envPath)) unlinkSync(envPath);
+          rmdirSync(directory);
+        }
+      }
+      if (server === undefined) throw new Error('Launcher did not start');
+      expect(server.failures).toEqual([]);
+      expect(server.output).toHaveLength(4);
+      const records = logs(server.stderr);
+      expect(records.filter((record) => record.event === 'mcp.ready')).toHaveLength(1);
+      expect(records.filter((record) => record.event === 'mcp.stopped')).toHaveLength(1);
+      expect(records.filter((record) => record.event === 'mcp.invocation')).toEqual([
+        expect.objectContaining({
+          toolName: 'get_profile',
+          actorUserId: tenants.a.userId,
+          tenantId: tenants.a.tenantId,
+          resultStatus: 'success',
+        }),
+      ]);
+      expect(server.output.join('')).not.toContain(secret);
+      expect(server.output.join('')).not.toContain(database.runtimeUrl);
+      expect(server.stderr).not.toContain(secret);
+      expect(server.stderr).not.toContain(database.runtimeUrl);
+    },
+  );
 
   it('preserves protocol-only stdout across a discovery probe, legacy initialization, tools, and EOF', async () => {
     const server = rawServer(environment(tenants.a));
@@ -633,7 +764,8 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
     const client = new Client({ name: 'unconfigured-principal', version: '1.0.0' });
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [main],
+      args: [entrypoint],
+      cwd: tmpdir(),
       env: environment(),
       stderr: 'pipe',
     });
@@ -671,7 +803,8 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
     const client = new Client({ name: 'evaluation-role-check', version: '1.0.0' });
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [main],
+      args: [entrypoint],
+      cwd: tmpdir(),
       env: environment(identity),
       stderr: 'pipe',
     });
@@ -799,7 +932,8 @@ describe('compiled project-note MCP mutation with PostgreSQL', () => {
     const client = new Client({ name: 'note-stdio-tests', version: '1.0.0' });
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [main],
+      args: [entrypoint],
+      cwd: tmpdir(),
       env: environment(identity),
       stderr: 'pipe',
     });

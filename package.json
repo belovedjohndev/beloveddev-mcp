@@ -21,7 +21,7 @@
     "test": "npm run build \u0026\u0026 vitest run",
     "test:watch": "npm run build \u0026\u0026 vitest",
     "verify": "npm run format:check \u0026\u0026 npm run lint \u0026\u0026 npm run typecheck \u0026\u0026 npm test",
-    "start": "node --env-file-if-exists=.env apps/mcp-server/dist/main.js",
+    "start": "node --env-file=.env apps/mcp-server/dist/main.js",
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f postgres",
