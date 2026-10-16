@@ -66,11 +66,15 @@ describe('MCP SDK and application contracts', () => {
   let getOpportunityById: ReturnType<typeof vi.fn<OpportunityRepository['getById']>>;
   let evaluationSearch: ReturnType<typeof vi.fn<EvidenceRepository['search']>>;
   let createNote: ReturnType<typeof vi.fn<ProjectNoteCreationRepository['create']>>;
+  let release: ReturnType<typeof vi.fn<() => void>>;
+  let enter: ReturnType<typeof vi.fn<() => (() => void) | null>>;
 
   beforeEach(async () => {
     fixture = createReadFixture();
     principal = { ...fixture.context, role: 'owner', permissions: permissionsForRole('owner') };
     logs = [];
+    release = vi.fn<() => void>();
+    enter = vi.fn<() => (() => void) | null>(() => release);
     const authorization = new PermissionAuthorization();
     const cursors = new SignedCursorCodec('contract-test-secret-at-least-32-bytes');
     const r = fixture.repositories;
@@ -169,6 +173,7 @@ describe('MCP SDK and application contracts', () => {
     server = createMcpServer({
       useCases,
       context: { resolve },
+      invocations: { enter },
       logger: {
         info: (record) => {
           logs.push(record);
@@ -183,6 +188,10 @@ describe('MCP SDK and application contracts', () => {
   afterEach(async () => {
     await client?.close();
     await server?.close();
+    expect(release).toHaveBeenCalledTimes(
+      enter.mock.results.filter((result) => result.type === 'return' && result.value === release)
+        .length,
+    );
   });
 
   it('advertises seven read-only tools and one idempotent mutation with strict schemas', async () => {
@@ -324,6 +333,7 @@ describe('MCP SDK and application contracts', () => {
       expect(resolve).not.toHaveBeenCalled();
       expect(fixture.calls).toEqual([]);
       expect(logs).toEqual([]);
+      expect(enter).not.toHaveBeenCalled();
     },
   );
 
@@ -377,6 +387,8 @@ describe('MCP SDK and application contracts', () => {
       expect(fixture.calls.length).toBeGreaterThan(0);
       expect(first.text).not.toContain('tenantId');
       expect(first.text).not.toContain('idempotencyKey');
+      expect(enter).toHaveBeenCalledTimes(1);
+      expect(release).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -1343,6 +1355,18 @@ describe('MCP SDK and application contracts', () => {
     const payload = errorPayload(await client.callTool({ name: 'get_profile', arguments: {} }));
     expect(payload.error.code).toBe('INTERNAL_ERROR');
     expect(logs[0]?.errorCategory).toBe('INTERNAL_ERROR');
+  });
+
+  it('rejects a mutation after shutdown admission closes before context or repository work', async () => {
+    enter.mockReturnValue(null);
+    const result = await client.callTool({ name: 'create_project_note', arguments: noteInput() });
+    const payload = errorPayload(result);
+    expect(payload.error.code).toBe('INTERNAL_ERROR');
+    expect(payload.error.requestId).toBe(logs[0]?.requestId);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(createNote).not.toHaveBeenCalled();
+    expect(fixture.calls).toEqual([]);
+    expect(release).not.toHaveBeenCalled();
   });
 
   it('context-provider failures use the safe application boundary', async () => {

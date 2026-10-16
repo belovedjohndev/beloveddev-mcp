@@ -47,6 +47,7 @@ export function createMcpServer(dependencies: {
   useCases: McpUseCases;
   context: RequestContextProvider;
   logger: InvocationLogger;
+  invocations?: { enter(): (() => void) | null };
 }): McpServer {
   const server = new McpServer({ name: 'beloveddev-mcp', version: '0.0.0' });
   const annotations = {
@@ -64,7 +65,11 @@ export function createMcpServer(dependencies: {
     const started = performance.now();
     let context: RequestContext | null = null;
     let errorCategory: ApplicationErrorCode | undefined;
+    let release: (() => void) | undefined;
     try {
+      const admission = dependencies.invocations?.enter();
+      if (admission === null) throw new ApplicationError('INTERNAL_ERROR');
+      release = admission;
       context = await dependencies.context.resolve(requestId);
       const result = await operation(context);
       if (typeof result !== 'object' || result === null || Array.isArray(result)) {
@@ -90,16 +95,20 @@ export function createMcpServer(dependencies: {
         content: [{ type: 'text', text: JSON.stringify(payload) }],
       };
     } finally {
-      dependencies.logger.info({
-        event: 'mcp.invocation',
-        requestId,
-        toolName: name,
-        actorUserId: context?.userId ?? null,
-        tenantId: context?.tenantId ?? null,
-        durationMs: Math.max(0, performance.now() - started),
-        resultStatus: errorCategory === undefined ? 'success' : 'error',
-        ...(errorCategory === undefined ? {} : { errorCategory }),
-      });
+      try {
+        dependencies.logger.info({
+          event: 'mcp.invocation',
+          requestId,
+          toolName: name,
+          actorUserId: context?.userId ?? null,
+          tenantId: context?.tenantId ?? null,
+          durationMs: Math.max(0, performance.now() - started),
+          resultStatus: errorCategory === undefined ? 'success' : 'error',
+          ...(errorCategory === undefined ? {} : { errorCategory }),
+        });
+      } finally {
+        release?.();
+      }
     }
   }
 

@@ -5,7 +5,7 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 8-B
+## Current status: Milestone 8-C
 
 The stdio MCP server exposes eight tools backed by tenant-scoped
 PostgreSQL repositories. The tools `get_profile`, `list_projects`, `get_project`,
@@ -133,8 +133,51 @@ Local stdio requires no HTTP listener or OAuth.
 The MCP client controls the subprocess lifecycle. Stop it through the client's
 disconnect/stop action, which should close stdin or terminate the child. In a
 terminal, use Ctrl+C; the server handles SIGINT, SIGTERM, and stdin EOF by closing
-the transport and database pool. Shutdown has no enforced deadline; disconnect
-does not guarantee cancellation or rollback of an in-flight mutation.
+the transport and database pool. Fatal database pool/client errors use the same
+idempotent shutdown path and exit nonzero. See the lifecycle behavior below.
+
+## Shutdown and connection failures
+
+On the first shutdown trigger, the process pauses input and stops admission before
+trusted-context resolution. Already admitted tool callbacks have up to 10 seconds
+to settle, including output validation and invocation logging. Transport and
+database cleanup are then attempted independently, even if either fails or stalls.
+Complete protocol messages are flushed before normal exit. One 15-second deadline
+covers draining, cleanup, and output flushing; expiry forces exit code 1. Cleanup
+failures and drain expiry also produce a nonzero exit. Repeated triggers do not
+restart the deadline or repeat cleanup; a later fatal pool error makes exit nonzero.
+The 10-second grace matches the existing statement timeout and leaves up to five
+seconds for cleanup/output within the total budget. It does not guarantee that a
+sequence of queries will finish. Startup failures after partial initialization use
+the same cleanup path, including a wire started before a server handle exists.
+Lifecycle diagnostics use safe structured stderr records without raw errors.
+Configure clients/supervisors to allow at least 15 seconds after EOF or a catchable
+signal before escalating to forced termination. A client that kills sooner can
+interrupt the grace period; it must still treat missing responses as uncertain.
+
+The SDK closes its wire immediately on stdin EOF or a broken output pipe. An
+admitted operation may still finish during the grace period, but its response may
+never arrive. Invocation success means application execution and output validation
+succeeded, not that the client received the response. Disconnect, cancellation,
+or forced termination does not prove rollback. A committed project note and its
+audit remain durable. Preserve the original `projectId`, `category`, `content`, and
+`idempotencyKey`. When service is available, retry that unchanged command under the
+same tenant/user: an existing commit is returned
+with `created=false`, while an uncommitted attempt can create the note. Do not
+generate a new key merely because a response was lost. The server never retries
+mutations automatically and does not claim to cancel database work on disconnect.
+
+Active-query connection failures are safely mapped through the existing application
+error boundary. PostgreSQL rolls back an interrupted open transaction; a failure
+near COMMIT can still leave its outcome uncertain. Fatal socket errors on checked-out
+clients are handled explicitly, preventing raw unhandled-event diagnostics. Both
+these client errors and idle pool errors stop the process; shutdown can beat error
+response delivery. Reconnect through a new process for an explicit retry if needed.
+Ordinary SQL/query errors still follow existing application handling. There is no automatic process restart. Uncatchable
+termination (including SIGKILL and Windows forced process termination) cannot run
+graceful cleanup; use client-managed stdin closure where available. POSIX signal
+delivery has integration coverage on POSIX; process-event routing is also tested
+on Windows. Shutdown deadlines depend on the Node event loop being able to run.
 
 ## Commands
 
@@ -279,10 +322,11 @@ constraints, cleanup behavior, and Drizzle compatibility notes.
 - [Agent instructions](AGENTS.md)
 
 All eight planned V1 tools are implemented through Milestone 7-B. M8-B adds the
-documented local trust boundary and protocol-safe launcher. Further Milestone 8
+documented local trust boundary and protocol-safe launcher; M8-C bounds lifecycle
+cleanup and documents uncertain outcomes after disconnect. Further Milestone 8
 hardening remains unfinished; this slice is not a production-readiness claim.
-Known blockers include an approved production authentication profile, bounded
-connection/query/shutdown behavior, operational readiness and failure testing,
+Known blockers include an approved production authentication profile, broader
+operational readiness and failure testing, resource/input-limit review,
 release packaging, and a tested backup/recovery and migration deployment process.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),

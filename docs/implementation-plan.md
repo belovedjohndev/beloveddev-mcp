@@ -620,11 +620,47 @@ missing settings, and environment precedence. Existing real PostgreSQL stdio
 tests use the absolute compiled entry point from another working directory.
 Application rules, permissions,
 schemas, persistence, transaction behavior, and idempotency are unchanged.
-No subsequent M8 hardening slice, remote transport, or identity provider is included.
-Milestone 8 remains incomplete: bounded lifecycle/resource behavior, operational
+M8-B includes no remote transport or identity provider.
+Milestone 8 remains incomplete: broader resource limits, operational
 readiness, release packaging, and backup/recovery and migration deployment
 procedures remain open. Production authentication requires a separate owner
 decision; local stdio is not a production-authentication bypass.
+
+### Milestone 8-C — Bounded local process lifecycle (implemented)
+
+One process-owned shutdown path handles SIGINT, SIGTERM, stdin EOF/MCP transport
+closure, fatal database pool/client errors, and partial startup failure. New application
+admission stops before context resolution, while admitted invocations have a
+10-second grace period. Transport and database cleanup are both attempted
+independently. A single 15-second total deadline includes cleanup and protocol
+output flushing; expiry forces nonzero termination. Repeated triggers are
+idempotent, and later fatal triggers preserve a nonzero exit. Diagnostics remain
+safe structured stderr logs. Existing database statement/connection timeouts remain.
+Checked-out clients retain an error listener so socket loss during a Drizzle
+transaction cannot escape as an unhandled event with raw Node diagnostics.
+
+The SDK can close its wire while an admitted write continues. A lost response does
+not prove rollback, and invocation success does not prove delivery. A note/audit
+committed before termination remains durable; explicit retries reuse the exact
+payload and original idempotency key under the same trusted actor/tenant. No
+automatic mutation retries, transaction changes, or cancellation promises are added.
+
+Deterministic lifecycle tests cover all trigger reasons, repeated/reentrant
+shutdown, draining, admission refusal, safe errors, failed or stuck cleanup,
+output flushing, and deadlines. Compiled process tests cover both signal-event
+handlers and partial startup with an initialized wire but no SDK handle. Sink
+failures and late cleanup rejections cannot skip cleanup or escape unobserved.
+A bounded subprocess test holds an admitted invocation and a real PostgreSQL
+client to exercise the full drain/pool deadline and subsequent connection release.
+Real PostgreSQL stdio tests cover fatal idle-backend loss, interrupted
+transaction rollback with explicit retry, and an admitted write committing after
+EOF without a delivered response or duplicate retry audit. Actual POSIX signal
+delivery tests are conditional on POSIX; Windows forced termination cannot invoke
+graceful cleanup. All eight tool contracts, authorization, tenant scope, and
+transaction/idempotency semantics remain unchanged.
+
+M8 as a whole remains unfinished. This slice adds no HTTP transport, authentication
+system, migration, automatic process restart, or unrelated hardening feature.
 
 ---
 

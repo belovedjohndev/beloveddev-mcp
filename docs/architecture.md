@@ -1,6 +1,6 @@
 # BelovedDev MCP V1 — Architecture
 
-## Implemented architecture through Milestone 8-B
+## Implemented architecture through Milestone 8-C
 
 The stdio executable composes trusted local request context, application use
 cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
@@ -417,11 +417,10 @@ identity. Protect local configuration and database credentials using OS access
 controls, restricted runtime grants, and a trusted host; there is no RLS defense
 against arbitrary SQL using compromised credentials.
 
-The MCP client owns subprocess startup and shutdown. Closing stdin, SIGINT, or
-SIGTERM triggers transport/pool cleanup; a terminal operator can use Ctrl+C.
-There is no enforced shutdown deadline or guarantee that disconnect cancels or
-rolls back an in-flight mutation. Those reliability limits remain separate
-hardening work. Protect env files with OS account/file permissions and keep
+The MCP client owns subprocess startup and shutdown. Closing stdin, SIGINT,
+SIGTERM, or a fatal database pool/client error uses the bounded lifecycle described in
+section 19; a terminal operator can use Ctrl+C. Disconnect does not guarantee
+cancellation or rollback of an in-flight mutation. Protect env files with OS account/file permissions and keep
 administrator/migration credentials separate from the restricted runtime role.
 
 M8-B documents this boundary without approving local authentication for production.
@@ -761,13 +760,65 @@ Do not scatter direct `process.env` access throughout packages.
 
 ## 19. Graceful Shutdown
 
-The application should respond to process termination by:
+The process-owned `apps/mcp-server/src/lifecycle.ts` controller handles SIGINT,
+SIGTERM, transport closure/stdin EOF, fatal database pool/client errors, and partial
+startup failures. It caches one shutdown promise before invoking cleanup hooks;
+reentrant transport-close callbacks and repeated signals share that path. A fatal
+trigger upgrades an ongoing graceful shutdown to a nonzero exit.
+The composition root retains the wire independently of the SDK handle, so it can
+close a partially started transport if `serveStdio()` throws before returning.
+Normal SDK closure is observed to avoid unnecessary duplicate wire cleanup.
 
-1. stopping acceptance of new work where supported;
-2. shutting down MCP transport;
-3. closing database connections;
-4. flushing logs if required;
-5. exiting predictably.
+On the first trigger, stdin is paused and the shared MCP invocation boundary
+refuses new admission before context resolution or protected repository work.
+Admitted callbacks are counted until execution, output validation, and invocation
+logging finish; release is guaranteed on success and application errors. Shutdown
+does not inject cancellation into use cases or retry them. SDK schema/protocol
+failures remain outside this application tracking boundary.
+
+Callbacks have a 10-second grace period. After draining or grace expiry, transport
+and database cleanup start independently, so rejection or a hung cleanup cannot
+prevent the other attempt. The process then closes stdin and flushes stdout before
+normal termination. A single referenced 15-second timer bounds the entire path,
+including output backpressure, and forces exit 1 on expiry. Draining/cleanup/output
+failures also exit 1; clean signals/EOF exit 0. Timers are cleared on completion.
+Safe lifecycle logs use only reason, phase, counts, and exit status on stderr.
+Existing connection acquisition and PostgreSQL statement timeouts are unchanged.
+The grace matches the existing 10-second statement timeout; the remaining total
+budget allows cleanup/output without promising completion of multi-query work.
+A diagnostic sink failure also exits nonzero without skipping cleanup or writing
+fallback diagnostics to stdout. Late cleanup rejections remain observed after the
+deadline; no further cleanup phases run after termination has been requested.
+
+The SDK closes its wire immediately on EOF or output failure and aborts its
+protocol requests. Application/database work already admitted may continue until
+it settles or process termination intervenes. An invocation success log describes
+execution and output validation, not response delivery. A committed note/audit is
+never undone by disconnect or response validation failure. An interrupted open
+transaction rolls back when its PostgreSQL connection closes, but a lost response
+or a connection failure near COMMIT leaves the client uncertain. Explicit retries
+must reuse the exact payload and original idempotency key under the same trusted
+tenant/user; they return the committed note or create it if no commit exists.
+No automatic mutation retry or response-delivery guarantee is introduced.
+
+An active-query failure uses existing safe application error mapping. The database
+adapter retains a client error listener while Drizzle holds a checked-out client,
+preventing an unhandled EventEmitter error from printing raw diagnostics. Fatal
+checked-out client errors and idle-pool errors both start shutdown; it can precede
+error-response delivery. Normal SQL errors do not trigger that fatal connection
+path. There is no automatic restart; an explicit retry may need a fresh stdio process.
+Unit tests use fake timers to cover deadlines, concurrent triggers, failed/stuck
+cleanup, and release behavior. Real PostgreSQL tests terminate isolated idle and
+active backends, verify rollback/no automatic retry, and hold an audit-table lock
+across EOF to prove an unseen commit is recovered without a duplicate note/audit.
+Another subprocess holds an admitted invocation and a real checked-out PostgreSQL
+client, proving the total deadline terminates a stalled drain/pool and releases
+the connection. A Node 24 module-hook test exercises failure after starting the
+wire but before returning the SDK handle. Test timeouts force-kill and observe
+child exit to prevent orphan processes on failed assertions.
+POSIX signal delivery is tested on POSIX; compiled-entry-point process events
+cover handler routing on Windows as well. Uncatchable termination cannot run
+cleanup, and timer deadlines require an available Node event loop.
 
 ## 20. Testing Architecture
 

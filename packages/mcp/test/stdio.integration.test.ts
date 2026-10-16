@@ -46,6 +46,12 @@ const logSchema = z.object({
   resultStatus: z.enum(['success', 'error']).optional(),
   errorCategory: z.string().optional(),
   durationMs: z.number().finite().nonnegative().optional(),
+  reason: z
+    .enum(['SIGINT', 'SIGTERM', 'transport_closed', 'database_error', 'startup_error'])
+    .optional(),
+  phase: z.enum(['input', 'transport', 'database', 'output']).optional(),
+  exitCode: z.union([z.literal(0), z.literal(1)]).optional(),
+  activeInvocations: z.number().int().nonnegative().optional(),
 });
 function logs(text: string) {
   return text
@@ -85,12 +91,18 @@ function rawServer(
   const output: string[] = [];
   let stderr = '';
   let nextId = 1;
-  const pending = new Map<number, (response: Response) => void>();
+  const pending = new Map<
+    number,
+    {
+      resolve: (response: Response) => void;
+      reject: (error: Error) => void;
+    }
+  >();
   lines.on('line', (line) => {
     output.push(line);
     try {
       const response = responseSchema.parse(JSON.parse(line));
-      pending.get(response.id)?.(response);
+      pending.get(response.id)?.resolve(response);
     } catch (error: unknown) {
       failures.push(error);
     }
@@ -99,9 +111,39 @@ function rawServer(
     stderr += chunk.toString();
   });
   const exited = new Promise<number | null>((resolve, reject) => {
-    child.once('exit', resolve);
+    // Wait for pipe closure as well as exit so assertions see the final stderr records.
+    child.once('close', resolve);
     child.once('error', reject);
   });
+  void exited.then(
+    () => {
+      for (const request of pending.values()) request.reject(new Error('MCP process closed'));
+    },
+    () => {
+      for (const request of pending.values()) request.reject(new Error('MCP process failed'));
+    },
+  );
+  async function waitForExit() {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        exited,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(() => {
+            child.kill('SIGKILL');
+            reject(new Error('MCP process did not exit within its shutdown deadline'));
+          }, 18_000);
+        }),
+      ]);
+    } catch (error: unknown) {
+      child.kill('SIGKILL');
+      await exited.catch(() => {});
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      lines.close();
+    }
+  }
   return {
     failures,
     output,
@@ -113,7 +155,7 @@ function rawServer(
       let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
         return await new Promise<Response>((resolve, reject) => {
-          pending.set(id, resolve);
+          pending.set(id, { resolve, reject });
           timeout = setTimeout(() => reject(new Error('Timed out waiting for MCP response')), 8000);
           child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
         });
@@ -125,23 +167,16 @@ function rawServer(
     notify(method: string) {
       child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method }) + '\n');
     },
+    endInput() {
+      child.stdin.end();
+    },
+    signal(signal: NodeJS.Signals) {
+      child.kill(signal);
+    },
+    waitForExit,
     async close() {
       child.stdin.end();
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      try {
-        return await Promise.race([
-          exited,
-          new Promise<never>((_, reject) => {
-            timeout = setTimeout(() => {
-              child.kill();
-              reject(new Error('MCP process did not exit after EOF'));
-            }, 8000);
-          }),
-        ]);
-      } finally {
-        clearTimeout(timeout);
-        lines.close();
-      }
+      return waitForExit();
     },
   };
 }
@@ -978,6 +1013,56 @@ describe('compiled project-note MCP mutation with PostgreSQL', () => {
     expect(JSON.parse(content.text)).toEqual(output);
     return output;
   }
+  async function startRaw(applicationName: string) {
+    const url = new URL(database.runtimeUrl);
+    url.searchParams.set('application_name', applicationName);
+    const server = rawServer({ ...environment(tenants.a), DATABASE_URL: url.href });
+    try {
+      expect(
+        (
+          await server.request('initialize', {
+            protocolVersion: '2025-06-18',
+            capabilities: {},
+            clientInfo: { name: 'lifecycle-tests', version: '1.0.0' },
+          })
+        ).error,
+      ).toBeUndefined();
+      server.notify('notifications/initialized');
+      return server;
+    } catch (error: unknown) {
+      await server.close();
+      throw error;
+    }
+  }
+  async function backend(applicationName: string, state: 'idle' | 'blocked') {
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      const result = await database.admin.pool.query<{ pid: number }>(
+        `SELECT pid FROM pg_stat_activity WHERE datname=current_database()
+         AND application_name=$1 AND (($2='idle' AND state='idle')
+           OR ($2='blocked' AND wait_event_type='Lock'))`,
+        [applicationName, state],
+      );
+      const pid = result.rows[0]?.pid;
+      if (pid !== undefined) return pid;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error('Expected isolated MCP database session state');
+  }
+  function expectSafeLifecycle(server: ReturnType<typeof rawServer>) {
+    expect(server.failures).toEqual([]);
+    for (const sensitive of [
+      secret,
+      database.runtimeUrl,
+      'MCP_STDIO_SENSITIVE',
+      'stdio-note-key',
+    ]) {
+      expect(server.stderr).not.toContain(sensitive);
+    }
+    expect(server.stderr).not.toContain('terminating connection');
+    expect(logs(server.stderr).filter(({ event }) => event === 'mcp.stopping')).toHaveLength(1);
+    expect(logs(server.stderr).filter(({ event }) => event === 'mcp.stopped')).toHaveLength(1);
+  }
   async function records() {
     return {
       notes: await database.admin.db.select().from(projectNotes),
@@ -1263,6 +1348,256 @@ describe('compiled project-note MCP mutation with PostgreSQL', () => {
       );
     },
   );
+
+  it.skipIf(process.platform === 'win32').each(['SIGINT', 'SIGTERM'] as const)(
+    'cleans up the real stdio process and database session on repeated %s',
+    async (signal) => {
+      const applicationName = `lifecycle-${randomUUID()}`;
+      const server = await startRaw(applicationName);
+      try {
+        await server.request('tools/call', { name: 'get_profile', arguments: {} });
+        await backend(applicationName, 'idle');
+        server.signal(signal);
+        server.signal(signal);
+        expect(await server.waitForExit()).toBe(0);
+        await expect
+          .poll(
+            async () => {
+              const connections = await database.admin.pool.query<{ count: number }>(
+                'SELECT count(*)::int AS count FROM pg_stat_activity WHERE application_name=$1',
+                [applicationName],
+              );
+              return connections.rows[0]?.count;
+            },
+            { timeout: 5_000 },
+          )
+          .toBe(0);
+        expectSafeLifecycle(server);
+        expect(logs(server.stderr)).toContainEqual(
+          expect.objectContaining({
+            event: 'mcp.stopping',
+            reason: signal,
+          }),
+        );
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  it('enforces one hard deadline across a stalled invocation and an unreleased PostgreSQL client', async () => {
+    const applicationName = `lifecycle-${randomUUID()}`;
+    const url = new URL(database.runtimeUrl);
+    url.searchParams.set('application_name', applicationName);
+    const moduleUrl = (relative: string) => new URL(relative, import.meta.url).href;
+    const source = `
+      const { StdioLifecycle } = await import(${JSON.stringify(moduleUrl('../../../apps/mcp-server/dist/lifecycle.js'))});
+      const { openDatabase } = await import(${JSON.stringify(moduleUrl('../../../packages/database/dist/client.js'))});
+      const { createLogger } = await import(${JSON.stringify(moduleUrl('../../../packages/infrastructure/dist/logger.js'))});
+      const { StdioServerTransport } = await import(${JSON.stringify(moduleUrl('../../../node_modules/@modelcontextprotocol/server/dist/stdio.mjs'))});
+      const logger = createLogger('info');
+      let lifecycle;
+      const database = openDatabase(process.env.DATABASE_URL, {
+        onIdleError: () => { void lifecycle?.stop('database_error'); },
+        onClientError: () => { void lifecycle?.stop('database_error'); },
+      });
+      const transport = new StdioServerTransport();
+      lifecycle = new StdioLifecycle({
+        logger,
+        pauseInput: () => { process.stdin.pause(); },
+        closeTransport: async () => {
+          await transport.close();
+          logger.info({ event: 'test.transport_closed' }, 'Test wire cleanup attempted');
+        },
+        closeDatabase: async () => {
+          logger.info({ event: 'test.database_cleanup_started' }, 'Test pool cleanup attempted');
+          await database.close();
+        },
+        finishOutput: async () => {
+          process.stdin.destroy();
+          await new Promise((resolve) => process.stdout.end(resolve));
+        },
+        terminate: (code) => process.exit(code),
+      });
+      // Hold a real checked-out client: pool.end() must wait until process termination.
+      await database.pool.connect();
+      lifecycle.enter();
+      transport.onclose = () => {
+        void lifecycle.stop('transport_closed');
+        setTimeout(() => { void lifecycle.stop('database_error'); }, 11_000);
+      };
+      await transport.start();
+      // This handle ensures a pending shutdown cannot pass by merely exiting naturally.
+      setInterval(() => {}, 1000);
+    `;
+    const server = rawServer(
+      { ...environment(tenants.a), DATABASE_URL: url.href },
+      {
+        args: ['--input-type=module', '--eval', source],
+      },
+    );
+    try {
+      await backend(applicationName, 'idle');
+      server.endInput();
+      expect(await server.waitForExit()).toBe(1);
+      expect(server.failures).toEqual([]);
+      expect(server.output).toEqual([]);
+      const events = logs(server.stderr);
+      for (const event of [
+        'mcp.stopping',
+        'mcp.drain_timeout',
+        'test.transport_closed',
+        'test.database_cleanup_started',
+        'mcp.shutdown_timeout',
+      ]) {
+        expect(events.filter((record) => record.event === event)).toHaveLength(1);
+      }
+      expect(events.some((record) => record.event === 'mcp.stopped')).toBe(false);
+      expect(server.stderr).not.toContain(database.runtimeUrl);
+      expect(server.stderr).not.toContain(secret);
+      await expect
+        .poll(
+          async () => {
+            const connections = await database.admin.pool.query<{ count: number }>(
+              'SELECT count(*)::int AS count FROM pg_stat_activity WHERE application_name=$1',
+              [applicationName],
+            );
+            return connections.rows[0]?.count;
+          },
+          { timeout: 5_000 },
+        )
+        .toBe(0);
+      expect(await records()).toEqual({ notes: [], audits: [] });
+    } finally {
+      await server.close();
+    }
+  }, 30_000);
+
+  it('shuts down with a safe nonzero exit when PostgreSQL kills an idle pool connection', async () => {
+    const applicationName = `lifecycle-${randomUUID()}`;
+    const server = await startRaw(applicationName);
+    try {
+      await server.request('tools/call', { name: 'get_profile', arguments: {} });
+      const pid = await backend(applicationName, 'idle');
+      await database.admin.pool.query('SELECT pg_terminate_backend($1)', [pid]);
+      expect(await server.waitForExit()).toBe(1);
+      expectSafeLifecycle(server);
+      const events = logs(server.stderr);
+      expect(events.filter(({ event }) => event === 'database.idle_error')).toHaveLength(1);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          event: 'mcp.stopping',
+          reason: 'database_error',
+        }),
+      );
+      expect(await records()).toEqual({ notes: [], audits: [] });
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('rolls back a disconnected active write and only retries on a new explicit tool call', async () => {
+    const applicationName = `lifecycle-${randomUUID()}`;
+    const server = await startRaw(applicationName);
+    const blocker = await database.admin.pool.connect();
+    try {
+      let response: PromiseSettledResult<Response> | undefined;
+      try {
+        await blocker.query('BEGIN');
+        await blocker.query('LOCK TABLE audit_logs IN SHARE MODE');
+        const pending = server.request('tools/call', {
+          name: 'create_project_note',
+          arguments: command(),
+        });
+        // Attach rejection handling immediately, including failures while awaiting the lock state.
+        const settled = Promise.allSettled([pending]);
+        const pid = await backend(applicationName, 'blocked');
+        await database.admin.pool.query('SELECT pg_terminate_backend($1)', [pid]);
+        [response] = await settled;
+      } finally {
+        await blocker.query('ROLLBACK');
+      }
+      // Active-client socket loss is fatal. Shutdown can beat error-response
+      // delivery; neither outcome permits an automatic mutation retry.
+      expect(response).toBeDefined();
+      if (response?.status === 'fulfilled') {
+        expect(response.value.error).toBeUndefined();
+        const failure = z
+          .object({
+            isError: z.literal(true),
+            content: z.array(z.object({ type: z.literal('text'), text: z.string() })),
+          })
+          .parse(response.value.result);
+        expect(response.value.result).not.toHaveProperty('structuredContent');
+        const error = safeErrorSchema.parse(JSON.parse(failure.content[0]?.text ?? '')).error;
+        expect(error.code).toBe('INTERNAL_ERROR');
+      }
+      expect(await records()).toEqual({ notes: [], audits: [] });
+      const exitCode = await server.close();
+      const events = logs(server.stderr);
+      expect(exitCode).toBe(1);
+      expect(events.some(({ event }) => event === 'database.client_error')).toBe(true);
+      expect(events.filter(({ event }) => event === 'mcp.invocation')).toEqual([
+        expect.objectContaining({ resultStatus: 'error', errorCategory: 'INTERNAL_ERROR' }),
+      ]);
+      const retried = success(await create(await connect(tenants.a)));
+      expect(retried.created).toBe(true);
+      const saved = await records();
+      expect(saved.notes).toHaveLength(1);
+      expect(saved.audits).toHaveLength(1);
+    } finally {
+      blocker.release(true);
+      await server.close();
+    }
+    expectSafeLifecycle(server);
+  });
+
+  it('drains an admitted write after EOF, preserves its unseen commit, and recovers by idempotent retry', async () => {
+    const applicationName = `lifecycle-${randomUUID()}`;
+    const server = await startRaw(applicationName);
+    const blocker = await database.admin.pool.connect();
+    let pending: Promise<PromiseSettledResult<Response>[]> | undefined;
+    try {
+      try {
+        await blocker.query('BEGIN');
+        await blocker.query('LOCK TABLE audit_logs IN SHARE MODE');
+        pending = Promise.allSettled([
+          server.request('tools/call', {
+            name: 'create_project_note',
+            arguments: command(),
+          }),
+        ]);
+        await backend(applicationName, 'blocked');
+        server.endInput();
+        await expect
+          .poll(() => server.stderr, { timeout: 5_000 })
+          .toContain('"event":"mcp.stopping"');
+      } finally {
+        await blocker.query('ROLLBACK');
+      }
+      expect(await server.waitForExit()).toBe(0);
+      expect((await pending)?.[0]?.status).toBe('rejected');
+      // Only initialize was answered: the commit happened after the SDK closed its wire.
+      expect(server.output).toHaveLength(1);
+      expectSafeLifecycle(server);
+      const invocations = logs(server.stderr).filter(({ event }) => event === 'mcp.invocation');
+      expect(invocations).toHaveLength(1);
+      expect(invocations[0]?.resultStatus).toBe('success');
+      const beforeRetry = await records();
+      expect(beforeRetry.notes).toHaveLength(1);
+      expect(beforeRetry.audits).toHaveLength(1);
+      expect(beforeRetry.audits[0]?.requestId).toBe(invocations[0]?.requestId);
+      const retried = success(await create(await connect(tenants.a)));
+      expect(retried.created).toBe(false);
+      expect(retried.note.id).toBe(beforeRetry.notes[0]?.id);
+      expect(retried.meta.requestId).not.toBe(beforeRetry.audits[0]?.requestId);
+      expect(await records()).toEqual(beforeRetry);
+    } finally {
+      blocker.release(true);
+      await server.close();
+      await pending;
+    }
+  });
 
   it('keeps every stdout line protocol-only during note creation and retry', async () => {
     const server = rawServer(environment(tenants.a));

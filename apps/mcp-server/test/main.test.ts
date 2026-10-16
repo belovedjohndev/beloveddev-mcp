@@ -29,10 +29,100 @@ function runServer(
     input: '',
     encoding: 'utf8',
     timeout: 15_000,
+    killSignal: 'SIGKILL',
   });
 }
 
 describe('stdio composition root', () => {
+  it('closes a partially started wire and database when serveStdio fails before returning a handle', () => {
+    const moduleUrl = (relative: string) => new URL(relative, import.meta.url).href;
+    const dataModule = (source: string) => `data:text/javascript,${encodeURIComponent(source)}`;
+    // Node 24 hooks inject only this subprocess's failure, without production test flags.
+    const sdk = dataModule(`
+      import { StdioServerTransport as Original } from ${JSON.stringify(moduleUrl('../../../node_modules/@modelcontextprotocol/server/dist/stdio.mjs'))};
+      export class StdioServerTransport extends Original {
+        async close() {
+          await super.close();
+          process.stderr.write(JSON.stringify({ event: 'test.transport_closed' }) + '\\n');
+        }
+      }
+      export function serveStdio(_factory, { transport }) {
+        transport.start().catch(() => {});
+        throw new Error('private-startup-failure-with-internal-path');
+      }
+    `);
+    const database = dataModule(`
+      export * from ${JSON.stringify(moduleUrl('../../../packages/database/dist/client.js'))};
+      import { openDatabase as original } from ${JSON.stringify(moduleUrl('../../../packages/database/dist/client.js'))};
+      export function openDatabase(...args) {
+        const database = original(...args);
+        return { ...database, close: async () => {
+          await database.close();
+          process.stderr.write(JSON.stringify({ event: 'test.database_closed' }) + '\\n');
+        } };
+      }
+    `);
+    const preload = dataModule(`
+      import { registerHooks } from 'node:module';
+      const replacements = new Map(${JSON.stringify([
+        ['@modelcontextprotocol/server/stdio', sdk],
+        ['@beloveddev/database/client', database],
+      ])});
+      registerHooks({ resolve(specifier, context, nextResolve) {
+        const url = replacements.get(specifier);
+        return url ? { url, shortCircuit: true } : nextResolve(specifier, context);
+      } });
+    `);
+    const result = runServer({}, { args: [`--import=${preload}`, entrypoint] });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    const records: { event: string; reason?: string; exitCode?: number }[] = result.stderr
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as { event: string });
+    for (const event of [
+      'mcp.startup_failed',
+      'mcp.stopping',
+      'test.transport_closed',
+      'test.database_closed',
+      'mcp.stopped',
+    ]) {
+      expect(records.filter((record) => record.event === event)).toHaveLength(1);
+    }
+    expect(records).toContainEqual(
+      expect.objectContaining({ event: 'mcp.stopping', reason: 'startup_error' }),
+    );
+    expect(records).toContainEqual(expect.objectContaining({ event: 'mcp.stopped', exitCode: 1 }));
+    expect(records.some((record) => record.event === 'mcp.ready')).toBe(false);
+    expect(result.stderr).not.toContain('private-');
+    expect(result.stderr).not.toContain('stack');
+  });
+
+  it.each(['SIGINT', 'SIGTERM'] as const)(
+    'routes repeated %s process events through one graceful shutdown',
+    (signal) => {
+      // Windows cannot deliver catchable POSIX signals with child.kill(). Emit the
+      // real process event after importing the compiled entry point instead.
+      const moduleUrl = new URL('../dist/main.js', import.meta.url).href;
+      const source = `await import(${JSON.stringify(moduleUrl)}); process.emit('${signal}'); process.emit('${signal}');`;
+      const result = runServer({}, { args: ['--input-type=module', '--eval', source] });
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe('');
+      const records: unknown[] = result.stderr
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => JSON.parse(line) as unknown);
+      expect(records).toEqual([
+        expect.objectContaining({ event: 'mcp.ready' }),
+        expect.objectContaining({ event: 'mcp.stopping', reason: signal }),
+        expect.objectContaining({ event: 'mcp.stopped', exitCode: 0 }),
+      ]);
+      expect(result.stderr).not.toContain('private-');
+    },
+  );
+
   it('starts with valid configuration and closes on stdin EOF without writing non-protocol stdout', () => {
     const result = runServer();
     expect(result.error).toBeUndefined();
@@ -49,6 +139,7 @@ describe('stdio composition root', () => {
         transport: 'stdio',
         authMode: 'local',
       }),
+      expect.objectContaining({ event: 'mcp.stopping', reason: 'transport_closed' }),
       expect.objectContaining({ event: 'mcp.stopped' }),
     ]);
     expect(result.stderr).not.toContain('private-');
@@ -103,6 +194,7 @@ describe('documented direct Node launcher', () => {
       .map((line) => JSON.parse(line) as unknown);
     expect(records).toEqual([
       expect.objectContaining({ event: 'mcp.ready', authMode: 'local' }),
+      expect.objectContaining({ event: 'mcp.stopping', reason: 'transport_closed' }),
       expect.objectContaining({ event: 'mcp.stopped' }),
     ]);
     expect(result.stderr).not.toContain('private-');

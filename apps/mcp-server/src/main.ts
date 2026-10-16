@@ -30,36 +30,61 @@ import { PostgresNoteRepository } from '@beloveddev/infrastructure/postgres/note
 import { PostgresProjectNoteCreationRepository } from '@beloveddev/infrastructure/postgres/project-note-creation-repository';
 import { PostgresOpportunityRepository } from '@beloveddev/infrastructure/postgres/opportunity-repository';
 import { createMcpServer } from '@beloveddev/mcp/server';
+import { StdioLifecycle } from './lifecycle.js';
 
 let database: DatabaseConnection | undefined;
 let handle: StdioServerHandle | undefined;
-let shutdown: Promise<void> | undefined;
+let transport: StdioServerTransport | undefined;
+let transportClosed = false;
+let lifecycle: StdioLifecycle | undefined;
 
 try {
   const environment = parseMcpEnvironment(process.env);
   const logger = createLogger(environment.LOG_LEVEL);
-  const close = () => {
-    shutdown ??= Promise.resolve().then(async () => {
-      await handle?.close();
-      await database?.close();
-      process.removeListener('SIGINT', stop);
-      process.removeListener('SIGTERM', stop);
+  const onSigint = () => {
+    void lifecycle?.stop('SIGINT');
+  };
+  const onSigterm = () => {
+    void lifecycle?.stop('SIGTERM');
+  };
+  lifecycle = new StdioLifecycle({
+    logger,
+    pauseInput: () => {
       process.stdin.pause();
-      logger.info({ event: 'mcp.stopped' }, 'MCP server stopped');
-    });
-    return shutdown;
-  };
-  const stop = () => {
-    void close().catch(() => {
-      logger.error({ event: 'mcp.shutdown_failed' }, 'Unable to close server resources');
-      process.exitCode = 1;
-    });
-  };
+    },
+    closeTransport: async () => {
+      try {
+        await handle?.close();
+      } finally {
+        // serveStdio may fail after starting the wire but before returning a handle.
+        if (!transportClosed) {
+          await transport?.close();
+          transportClosed = true;
+        }
+      }
+    },
+    closeDatabase: async () => {
+      await database?.close();
+    },
+    finishOutput: async () => {
+      process.stdin.destroy();
+      // Flush complete protocol messages before normal termination, within the same deadline.
+      await new Promise<void>((resolve, reject) => {
+        process.stdout.end((error?: Error | null) => (error ? reject(error) : resolve()));
+      });
+      process.removeListener('SIGINT', onSigint);
+      process.removeListener('SIGTERM', onSigterm);
+    },
+    terminate: (code) => process.exit(code),
+  });
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
   database = openDatabase(environment.DATABASE_URL, {
+    onClientError: () => {
+      void lifecycle?.databaseError('client');
+    },
     onIdleError: () => {
-      logger.error({ event: 'database.idle_error' }, 'Database connection failed');
-      process.exitCode = 1;
-      stop();
+      void lifecycle?.databaseError('idle');
     },
   });
   const memberships = new PostgresMembershipRepository(database.db);
@@ -94,19 +119,19 @@ try {
       authorization,
     ),
   };
-  const transport = new StdioServerTransport();
-  handle = serveStdio(() => createMcpServer({ useCases, context, logger }), {
+  transport = new StdioServerTransport();
+  const invocations = lifecycle;
+  handle = serveStdio(() => createMcpServer({ useCases, context, logger, invocations }), {
     transport,
     onerror: () => logger.error({ event: 'mcp.protocol_error' }, 'MCP protocol operation failed'),
   });
   // Discovery probes may be discarded; the shared pool follows the wire lifetime.
   const onTransportClose = transport.onclose;
   transport.onclose = () => {
+    transportClosed = true;
+    void lifecycle?.stop('transport_closed');
     onTransportClose?.();
-    stop();
   };
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
   logger.info(
     {
       event: 'mcp.ready',
@@ -118,17 +143,20 @@ try {
   );
 } catch (error: unknown) {
   const logger = createLogger('error');
-  logger.error(
-    {
-      event:
-        error instanceof EnvironmentValidationError
-          ? 'configuration.invalid'
-          : 'mcp.startup_failed',
-      invalidVariables: error instanceof EnvironmentValidationError ? error.fields : [],
-    },
-    'Unable to initialize MCP server',
-  );
-  await handle?.close();
-  await database?.close();
-  process.exitCode = 1;
+  try {
+    logger.error(
+      {
+        event:
+          error instanceof EnvironmentValidationError
+            ? 'configuration.invalid'
+            : 'mcp.startup_failed',
+        invalidVariables: error instanceof EnvironmentValidationError ? error.fields : [],
+      },
+      'Unable to initialize MCP server',
+    );
+  } catch {
+    // A broken stderr sink must not skip cleanup or fall back to protocol stdout.
+  }
+  if (lifecycle !== undefined) await lifecycle.stop('startup_error');
+  else process.exitCode = 1;
 }
