@@ -5,26 +5,29 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 7-A
+## Current status: Milestone 7-B
 
-The stdio MCP server exposes seven read-only tools backed by tenant-scoped
-PostgreSQL repositories: `get_profile`, `list_projects`, `get_project`,
+The stdio MCP server exposes eight tools backed by tenant-scoped
+PostgreSQL repositories. The tools `get_profile`, `list_projects`, `get_project`,
 `search_project_evidence`, `get_blockers`, `list_opportunities`, and
-`evaluate_opportunity`. Project
+`evaluate_opportunity` are read-only; `create_project_note` is the sole mutation. Project
 evidence search uses a stored weighted English `tsvector`, deterministic
 PostgreSQL relevance ranking, structured filters, and signed keyset cursors.
 Opportunity listing uses exact structured filters, a literal cross-field query,
 and signed deterministic keyset pagination. Opportunity evaluation reuses the
 versioned domain policy and bounded evidence search; budget compatibility remains
 null because profile currency is not modeled. Owners and members can evaluate;
-viewers can list opportunities. Evaluation is derived and read-only. MCP exposure
-of note creation remains a later milestone.
+viewers can list opportunities. Evaluation is derived and read-only.
 
 Milestone 7-A implements `CreateProjectNote` in the application and PostgreSQL
 layers, with owner/member authorization, tenant-scoped project checks, exact
 idempotent retries, and atomic note/audit insertion. Strict input accepts only
-project ID, category, content, and an opaque idempotency key. The note mutation
-is not registered with MCP; its interface wiring remains Milestone 7-B.
+project ID, category, content, and an opaque idempotency key. Milestone 7-B exposes
+the command through an explicit MCP registration and the shared invocation boundary.
+New notes and durable audits commit together. Identical retries return the original
+note with `created=false` and a fresh `meta.requestId`; changed payloads conflict.
+The runtime role needs INSERT on `project_notes` and `audit_logs` for this tool;
+see [runtime grant requirements](docs/database.md).
 
 ## Requirements
 
@@ -166,6 +169,11 @@ project filters return no search results. Composite foreign keys enforce project
 ownership. Local mode is intentionally unavailable in production until a
 production identity provider is implemented.
 
+Note creation requires `project_notes:create` for owners/members. Tenant, author,
+and request ID come only from trusted context; foreign and missing projects are
+indistinguishable `NOT_FOUND` errors. Invocation logs exclude note content and
+idempotency keys. No automatic transaction or tool retries are performed.
+
 ## CI and verification
 
 GitHub Actions installs with `npm ci`, starts Compose on an assigned port, applies
@@ -185,8 +193,8 @@ constraints, cleanup behavior, and Drizzle compatibility notes.
 - [Implementation plan](docs/implementation-plan.md)
 - [Agent instructions](AGENTS.md)
 
-Seven of the eight planned V1 tools are implemented. MCP exposure of the audited,
-idempotent note command remains planned.
+All eight planned V1 tools are implemented through Milestone 7-B. Milestone 8
+production hardening remains outside this slice.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
 [PostgreSQL image initialization and storage](https://hub.docker.com/_/postgres),

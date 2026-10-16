@@ -7,9 +7,10 @@ import { Client, type CallToolResult } from '@modelcontextprotocol/client';
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/client/stdio';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parseTestDatabaseUrl } from '@beloveddev/infrastructure/environment';
-import { projectEvidence } from '@beloveddev/database/schema';
+import { auditLogs, projectEvidence, projectNotes, projects } from '@beloveddev/database/schema';
 import { createTestDatabase, type TestDatabase } from '@beloveddev/test-support/test-database';
 import {
+  projectInput,
   removeTenantFixtures,
   seedTwoTenants,
   type TenantFixtures,
@@ -32,6 +33,7 @@ const logSchema = z.object({
   tenantId: z.uuid().nullable().optional(),
   resultStatus: z.enum(['success', 'error']).optional(),
   errorCategory: z.string().optional(),
+  durationMs: z.number().finite().nonnegative().optional(),
 });
 function logs(text: string) {
   return text
@@ -267,7 +269,7 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
       const requestIds: string[] = [];
       try {
         await client.connect(transport);
-        expect((await client.listTools()).tools).toHaveLength(7);
+        expect((await client.listTools()).tools).toHaveLength(8);
         const profile = toolSchemas.get_profile.output.parse(
           (await client.callTool({ name: 'get_profile', arguments: {} })).structuredContent,
         );
@@ -720,5 +722,461 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
     } finally {
       await client.close();
     }
+  });
+});
+
+describe('compiled project-note MCP mutation with PostgreSQL', () => {
+  let database: TestDatabase;
+  let tenants: TenantFixtures;
+  let role: string;
+  type Session = { client: Client; readonly stderr: string; readonly errors: Error[] };
+  let sessions: Session[];
+
+  beforeAll(async () => {
+    database = await createTestDatabase(parseTestDatabaseUrl(process.env), {
+      projectNoteWrites: true,
+    });
+    role = new URL(database.runtimeUrl).username;
+    if (!/^beloveddev_test_[0-9a-f]{32}_runtime$/.test(role))
+      throw new Error('Unexpected test role');
+    await database.admin.pool.query(`REVOKE INSERT ON projects FROM "${role}"`);
+    const privileges = await database.runtime.pool.query<{
+      table_name: string;
+      privilege_type: string;
+    }>(
+      `SELECT table_name, privilege_type FROM information_schema.role_table_grants
+       WHERE grantee=current_user AND table_schema='public' AND privilege_type<>'SELECT'
+       ORDER BY table_name, privilege_type`,
+    );
+    expect(privileges.rows).toEqual([
+      { table_name: 'audit_logs', privilege_type: 'INSERT' },
+      { table_name: 'project_notes', privilege_type: 'INSERT' },
+    ]);
+    const roleSafety = await database.runtime.pool.query<{ restricted: boolean }>(
+      `SELECT NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolbypassrls
+        OR has_schema_privilege(current_user, 'public', 'CREATE')) AS restricted
+       FROM pg_roles WHERE rolname=current_user`,
+    );
+    expect(roleSafety.rows).toEqual([{ restricted: true }]);
+  });
+  beforeEach(async () => {
+    sessions = [];
+    tenants = await seedTwoTenants(database.admin.db);
+  });
+  afterEach(async () => {
+    try {
+      const closed = await Promise.allSettled(sessions.map(({ client }) => client.close()));
+      for (const result of closed) expect(result.status).toBe('fulfilled');
+      for (const session of sessions) {
+        expect(session.errors).toEqual([]);
+        expect(session.stderr).not.toContain('MCP_STDIO_SENSITIVE');
+        expect(session.stderr).not.toContain('stdio-note-key');
+        expect(session.stderr).not.toContain(secret);
+        expect(session.stderr).not.toContain(database.runtimeUrl);
+      }
+    } finally {
+      if (tenants) await removeTenantFixtures(database.admin.db, tenants);
+    }
+  });
+  afterAll(async () => {
+    await database?.close();
+  });
+
+  function environment(identity?: TenantFixtures['a']) {
+    return {
+      ...getDefaultEnvironment(),
+      NODE_ENV: 'test',
+      LOG_LEVEL: 'info',
+      DATABASE_URL: database.runtimeUrl,
+      MCP_AUTH_MODE: 'local',
+      MCP_CURSOR_SECRET: secret,
+      ...(identity
+        ? { MCP_LOCAL_TENANT_ID: identity.tenantId, MCP_LOCAL_USER_ID: identity.userId }
+        : {}),
+    };
+  }
+  async function connect(identity?: TenantFixtures['a']) {
+    const client = new Client({ name: 'note-stdio-tests', version: '1.0.0' });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [main],
+      env: environment(identity),
+      stderr: 'pipe',
+    });
+    let stderr = '';
+    const errors: Error[] = [];
+    client.onerror = (error) => {
+      errors.push(error);
+    };
+    transport.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    const session: Session = {
+      client,
+      errors,
+      get stderr() {
+        return stderr;
+      },
+    };
+    sessions.push(session);
+    await client.connect(transport);
+    return session;
+  }
+  function command(projectId: string = tenants.a.projectId) {
+    return {
+      projectId,
+      category: 'decision' as const,
+      content: '  MCP_STDIO_SENSITIVE client note 🚀\n  code  ',
+      idempotencyKey: 'stdio-note-key-001',
+    };
+  }
+  function create(session: Session, args: Record<string, unknown> = command()) {
+    return session.client.callTool(
+      { name: 'create_project_note', arguments: args },
+      { timeout: 12_000 },
+    );
+  }
+  function success(result: CallToolResult) {
+    expect(result.isError).not.toBe(true);
+    const output = toolSchemas.create_project_note.output.parse(result.structuredContent);
+    const content = result.content[0];
+    if (content?.type !== 'text') throw new Error('Expected note JSON content');
+    expect(JSON.parse(content.text)).toEqual(output);
+    return output;
+  }
+  async function records() {
+    return {
+      notes: await database.admin.db.select().from(projectNotes),
+      audits: await database.admin.db.select().from(auditLogs),
+    };
+  }
+
+  it.each(['a', 'b'] as const)(
+    'creates and retries as tenant %s with trusted identity and a single durable audit',
+    async (tenant) => {
+      const identity = tenants[tenant];
+      if (tenant === 'b')
+        await database.admin.pool.query("UPDATE tenant_memberships SET role='member' WHERE id=$1", [
+          identity.membershipId,
+        ]);
+      const session = await connect(identity);
+      expect((await session.client.listTools()).tools).toHaveLength(8);
+      const args = command(identity.projectId.toUpperCase());
+      const first = success(await create(session, args));
+      const retry = success(await create(session, args));
+      expect(first.created).toBe(true);
+      expect(retry.created).toBe(false);
+      expect(retry.note).toEqual(first.note);
+      expect(first.note.content).toBe(args.content);
+      expect(first.note.projectId).toBe(identity.projectId);
+      expect(retry.meta.requestId).not.toBe(first.meta.requestId);
+      const saved = await records();
+      expect(saved.notes).toHaveLength(1);
+      expect(saved.audits).toHaveLength(1);
+      expect(saved.notes[0]).toMatchObject({
+        id: first.note.id,
+        tenantId: identity.tenantId,
+        authorUserId: identity.userId,
+        idempotencyKey: args.idempotencyKey,
+      });
+      expect(saved.audits[0]).toMatchObject({
+        tenantId: identity.tenantId,
+        actorUserId: identity.userId,
+        action: 'project_note.created',
+        resourceType: 'project_note',
+        resourceId: first.note.id,
+        requestId: first.meta.requestId,
+        metadata: { projectId: identity.projectId, category: args.category },
+      });
+      const project = toolSchemas.get_project.output.parse(
+        (
+          await session.client.callTool({
+            name: 'get_project',
+            arguments: { projectId: identity.projectId },
+          })
+        ).structuredContent,
+      );
+      expect(project.recentNotes).toEqual([
+        {
+          id: first.note.id,
+          category: first.note.category,
+          content: first.note.content,
+          createdAt: first.note.createdAt,
+        },
+      ]);
+      await session.client.close();
+      const invocations = logs(session.stderr).filter(
+        ({ toolName }) => toolName === 'create_project_note',
+      );
+      expect(invocations.map(({ requestId }) => requestId)).toEqual([
+        first.meta.requestId,
+        retry.meta.requestId,
+      ]);
+      expect(
+        invocations.every(
+          (record) =>
+            record.actorUserId === identity.userId &&
+            record.tenantId === identity.tenantId &&
+            record.resultStatus === 'success' &&
+            record.durationMs !== undefined &&
+            record.durationMs >= 0,
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(saved.audits)).not.toContain('MCP_STDIO_SENSITIVE');
+      expect(JSON.stringify(saved.audits)).not.toContain(args.idempotencyKey);
+    },
+  );
+
+  it('keeps tenant/key scopes isolated and maps missing projects and conflicting reuse safely', async () => {
+    await database.admin.pool.query("UPDATE tenant_memberships SET role='member' WHERE id=$1", [
+      tenants.b.membershipId,
+    ]);
+    const owner = await connect(tenants.a);
+    const member = await connect(tenants.b);
+    const original = success(await create(owner));
+    for (const projectId of [tenants.a.projectId, randomUUID()]) {
+      const error = safeError(await create(member, command(projectId)));
+      expect(error.code).toBe('NOT_FOUND');
+      expect(error.message).toBe('The requested resource was not found.');
+    }
+    const other = success(await create(member, command(tenants.b.projectId)));
+    expect(other.created).toBe(true);
+    expect(other.note.id).not.toBe(original.note.id);
+    const secondProjectId = randomUUID();
+    await database.admin.db.insert(projects).values({
+      ...projectInput(tenants.a.tenantId, tenants.a.clientId),
+      id: secondProjectId,
+      slug: 'second-owned-project',
+    });
+    for (const change of [
+      { content: 'different content' },
+      { category: 'technical' },
+      { projectId: secondProjectId },
+    ]) {
+      expect(safeError(await create(owner, { ...command(), ...change })).code).toBe('CONFLICT');
+    }
+    const saved = await records();
+    expect(saved.notes).toHaveLength(2);
+    expect(saved.audits).toHaveLength(2);
+    await Promise.all([owner.client.close(), member.client.close()]);
+    const failures = [...logs(owner.stderr), ...logs(member.stderr)].filter(
+      ({ resultStatus }) => resultStatus === 'error',
+    );
+    expect(failures.map(({ errorCategory }) => errorCategory).sort()).toEqual([
+      'CONFLICT',
+      'CONFLICT',
+      'CONFLICT',
+      'NOT_FOUND',
+      'NOT_FOUND',
+    ]);
+  });
+
+  it.each(['missing', 'viewer'] as const)(
+    'denies %s context before protected repository work',
+    async (kind) => {
+      await database.admin.pool.query(`REVOKE SELECT ON projects, project_notes FROM "${role}"`);
+      try {
+        const session = await connect(kind === 'viewer' ? tenants.b : undefined);
+        const payload = safeError(await create(session, command(tenants.b.projectId)));
+        const code = kind === 'viewer' ? 'FORBIDDEN' : 'UNAUTHENTICATED';
+        expect(payload.code).toBe(code);
+        expect(await records()).toEqual({ notes: [], audits: [] });
+        await session.client.close();
+        expect(logs(session.stderr)).toContainEqual(
+          expect.objectContaining({
+            toolName: 'create_project_note',
+            requestId: payload.requestId,
+            resultStatus: 'error',
+            errorCategory: code,
+          }),
+        );
+      } finally {
+        await database.admin.pool.query(`GRANT SELECT ON projects, project_notes TO "${role}"`);
+      }
+    },
+  );
+
+  it('rechecks role changes and revocation on retries instead of bypassing authorization', async () => {
+    const session = await connect(tenants.b);
+    const args = command(tenants.b.projectId);
+    expect(safeError(await create(session, args)).code).toBe('FORBIDDEN');
+    await database.admin.pool.query("UPDATE tenant_memberships SET role='member' WHERE id=$1", [
+      tenants.b.membershipId,
+    ]);
+    const first = success(await create(session, args));
+    await database.admin.pool.query("UPDATE tenant_memberships SET role='viewer' WHERE id=$1", [
+      tenants.b.membershipId,
+    ]);
+    expect(safeError(await create(session, args)).code).toBe('FORBIDDEN');
+    await database.admin.pool.query("UPDATE tenant_memberships SET status='inactive' WHERE id=$1", [
+      tenants.b.membershipId,
+    ]);
+    expect(safeError(await create(session, args)).code).toBe('UNAUTHENTICATED');
+    const saved = await records();
+    expect(saved.notes).toHaveLength(1);
+    expect(saved.audits).toHaveLength(1);
+    expect(saved.audits[0]?.requestId).toBe(first.meta.requestId);
+  });
+
+  it('rejects invalid SDK input without invocation logs or writes', async () => {
+    const session = await connect(tenants.a);
+    for (const args of [
+      { ...command(), projectId: 'invalid' },
+      { ...command(), tenantId: tenants.b.tenantId },
+      { ...command(), authorUserId: tenants.b.userId },
+      { ...command(), content: ' \t\n' },
+      { ...command(), content: 'x'.repeat(10_001) },
+    ]) {
+      const result = await create(session, args);
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+    }
+    expect(await records()).toEqual({ notes: [], audits: [] });
+    await session.client.close();
+    expect(logs(session.stderr).filter(({ event }) => event === 'mcp.invocation')).toEqual([]);
+  });
+
+  it('returns safe INTERNAL_ERROR and rolls back if durable audit insertion fails', async () => {
+    const session = await connect(tenants.a);
+    await database.admin.pool.query(`REVOKE INSERT ON audit_logs FROM "${role}"`);
+    let requestId: string | undefined;
+    try {
+      const error = safeError(await create(session));
+      expect(error.code).toBe('INTERNAL_ERROR');
+      requestId = error.requestId;
+      expect(await records()).toEqual({ notes: [], audits: [] });
+    } finally {
+      await database.admin.pool.query(`GRANT INSERT ON audit_logs TO "${role}"`);
+    }
+    const retried = success(await create(session));
+    expect(retried.created).toBe(true);
+    const saved = await records();
+    expect(saved.notes).toHaveLength(1);
+    expect(saved.audits).toHaveLength(1);
+    expect(saved.audits[0]?.requestId).toBe(retried.meta.requestId);
+    await session.client.close();
+    expect(logs(session.stderr)).toContainEqual(
+      expect.objectContaining({
+        requestId,
+        toolName: 'create_project_note',
+        errorCategory: 'INTERNAL_ERROR',
+        resultStatus: 'error',
+      }),
+    );
+    expect(session.stderr).not.toContain('permission denied');
+  });
+
+  it.each(['identical', 'conflicting'] as const)(
+    'handles simultaneous %s requests through independent stdio sessions',
+    async (kind) => {
+      const first = await connect(tenants.a);
+      const second = await connect(tenants.a);
+      const blocker = await database.admin.pool.connect();
+      let pending: Promise<PromiseSettledResult<CallToolResult>[]> | undefined;
+      let waiters = 0;
+      try {
+        await blocker.query('BEGIN');
+        await blocker.query('LOCK TABLE project_notes IN SHARE MODE');
+        pending = Promise.allSettled([
+          create(first),
+          create(second, {
+            ...command(),
+            ...(kind === 'conflicting' ? { content: 'MCP_STDIO_SENSITIVE different content' } : {}),
+          }),
+        ]);
+        const deadline = Date.now() + 5_000;
+        while (Date.now() < deadline && waiters < 2) {
+          const locks = await database.admin.pool.query<{ count: number }>(
+            "SELECT count(*)::int AS count FROM pg_stat_activity WHERE usename=$1 AND wait_event_type='Lock'",
+            [role],
+          );
+          waiters = locks.rows[0]?.count ?? 0;
+          if (waiters < 2) await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      } finally {
+        try {
+          await blocker.query('ROLLBACK');
+        } finally {
+          blocker.release(true);
+          await pending;
+        }
+      }
+      expect(waiters).toBe(2);
+      if (pending === undefined) throw new Error('Concurrent requests were not started');
+      const settled = await pending;
+      expect(settled.every(({ status }) => status === 'fulfilled')).toBe(true);
+      const results = settled.flatMap((entry) =>
+        entry.status === 'fulfilled' ? [entry.value] : [],
+      );
+      const successes = results.filter((result) => result.isError !== true).map(success);
+      expect(successes.filter(({ created }) => created)).toHaveLength(1);
+      if (kind === 'identical') {
+        expect(successes).toHaveLength(2);
+        expect(successes.filter(({ created }) => !created)).toHaveLength(1);
+        expect(successes[0]?.note).toEqual(successes[1]?.note);
+        expect(successes[0]?.meta.requestId).not.toBe(successes[1]?.meta.requestId);
+      } else {
+        expect(successes).toHaveLength(1);
+        const failure = results.find(({ isError }) => isError === true);
+        if (failure === undefined) throw new Error('Expected conflicting result');
+        expect(safeError(failure).code).toBe('CONFLICT');
+      }
+      const saved = await records();
+      expect(saved.notes).toHaveLength(1);
+      expect(saved.audits).toHaveLength(1);
+      expect(saved.audits[0]?.requestId).toBe(
+        successes.find(({ created }) => created)?.meta.requestId,
+      );
+    },
+  );
+
+  it('keeps every stdout line protocol-only during note creation and retry', async () => {
+    const server = rawServer(environment(tenants.a));
+    try {
+      expect(
+        (
+          await server.request('initialize', {
+            protocolVersion: '2025-06-18',
+            capabilities: {},
+            clientInfo: { name: 'raw-note-stdio', version: '1.0.0' },
+          })
+        ).error,
+      ).toBeUndefined();
+      server.notify('notifications/initialized');
+      const schema = z.object({
+        content: z.array(z.object({ type: z.literal('text'), text: z.string() })),
+        structuredContent: toolSchemas.create_project_note.output,
+      });
+      const first = schema.parse(
+        (await server.request('tools/call', { name: 'create_project_note', arguments: command() }))
+          .result,
+      );
+      const retry = schema.parse(
+        (await server.request('tools/call', { name: 'create_project_note', arguments: command() }))
+          .result,
+      );
+      expect(first.structuredContent.created).toBe(true);
+      expect(retry.structuredContent.created).toBe(false);
+      expect(retry.structuredContent.note).toEqual(first.structuredContent.note);
+      expect(JSON.parse(first.content[0]?.text ?? '')).toEqual(first.structuredContent);
+      expect(JSON.parse(retry.content[0]?.text ?? '')).toEqual(retry.structuredContent);
+      expect(
+        z
+          .object({ tools: z.array(z.unknown()).length(8) })
+          .parse((await server.request('tools/list')).result).tools,
+      ).toHaveLength(8);
+    } finally {
+      expect(await server.close()).toBe(0);
+    }
+    expect(server.failures).toEqual([]);
+    expect(server.output).toHaveLength(4);
+    expect(logs(server.stderr).filter(({ event }) => event === 'mcp.invocation')).toHaveLength(2);
+    expect(server.stderr).not.toContain('MCP_STDIO_SENSITIVE');
+    expect(server.stderr).not.toContain('stdio-note-key');
+    expect(server.stderr).not.toContain(secret);
+    expect(server.stderr).not.toContain(database.runtimeUrl);
+    const saved = await records();
+    expect(saved.notes).toHaveLength(1);
+    expect(saved.audits).toHaveLength(1);
   });
 });

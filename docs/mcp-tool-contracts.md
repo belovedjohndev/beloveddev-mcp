@@ -694,10 +694,12 @@ Structured request log only.
 
 Append a contextual note to a project.
 
-This is the only planned V1 MCP mutation.
+This is the only V1 MCP mutation, implemented through Milestone 7-B.
 
 Milestone 7-A implements the application command and PostgreSQL transaction only.
-The MCP tool remains unregistered until Milestone 7-B.
+Milestone 7-B registers the command explicitly through `McpServer.registerTool()`
+and the shared invocation boundary. Its annotations are `readOnlyHint=false`,
+`destructiveHint=false`, `idempotentHint=true`, and `openWorldHint=false`.
 
 ## Input
 
@@ -751,8 +753,10 @@ note
 created
 ```
 
-`createdAt` is an ISO timestamp. The application result contains no `meta`;
-M7-B will add transport `meta.requestId` when the MCP tool is registered.
+`createdAt` is an ISO timestamp. The application result contains no `meta`.
+The strict MCP success output adds only `meta: { requestId: UUID }`; both text
+content and structuredContent contain that same JSON object. Note objects expose
+only the five documented fields, excluding tenant, author, and idempotency key.
 
 `created` indicates:
 
@@ -825,6 +829,10 @@ foreign projects return `NOT_FOUND`, even when a key already exists. Retries ret
 the original note ID and creation time with `created=false` and do not add an
 audit record. Request ID is not part of the comparison.
 
+Every MCP invocation has a fresh generated request ID. On creation, this is also
+the durable audit request ID. A retry's `meta.requestId` identifies the retry
+invocation while the original note/audit remain unchanged.
+
 Project identity uses the verified project's canonical PostgreSQL UUID, so
 uppercase and lowercase UUID spellings resolve to the same operation. Category,
 content, and opaque key comparisons remain exact and case-sensitive.
@@ -843,6 +851,21 @@ the exact command with the same key while still authorized.
 - project missing or cross-tenant → `NOT_FOUND`
 - conflicting idempotency reuse → `CONFLICT`
 - database failure → rollback + `INTERNAL_ERROR`
+
+Malformed MCP arguments are rejected by the SDK before context resolution or
+application work; they do not require the application envelope or request ID.
+Application errors return `isError=true` and safe JSON text with code, message,
+and request ID, without success structuredContent. Invocation logs contain only
+the shared safe metadata, never note content, opaque keys, or full bodies.
+
+If success output violates the strict MCP schema, the invocation returns a safe
+`INTERNAL_ERROR` without exposing that output. The note/audit transaction may
+already have committed before output validation or response delivery fails.
+After this failure or a transport timeout, retry the exact command with the
+original idempotency key; generating a new key could create a duplicate note.
+The server does not retry automatically. A successful identical retry returns
+`created=false` with a fresh invocation request ID and leaves the original audit
+unchanged.
 
 ## Audit
 
@@ -863,8 +886,8 @@ M7-A stores exactly `{ projectId, category }` as metadata, without note content 
 idempotency keys. Audit insertion occurs in the note transaction; an audit or
 commit failure rolls back both records. Existing historical notes are preserved
 without fabricated backfilled audits. The application result contains `note`
-and `created`; MCP `meta.requestId` will be added by the invocation boundary in
-M7-B.
+and `created`; MCP `meta.requestId` is added by the shared invocation boundary in
+M7-B. No automatic transaction or MCP tool retries are introduced.
 
 ---
 

@@ -546,11 +546,22 @@ Concurrent tests use a five-second lock-barrier deadline, ten-second database
 statement timeouts, and the integration runner's twenty-second test timeout.
 They release the lock and await all attempts in cleanup before removing fixtures.
 
-### Milestone 7-B — MCP exposure (planned)
+### Milestone 7-B — MCP exposure (implemented)
 
-Registration, mutation annotations, composition-root wiring, MCP invocation
-logging, and compiled stdio mutation coverage remain M7-B. `create_project_note`
-is not available through MCP in M7-A. Milestone 8 is not started.
+`create_project_note` is explicitly registered with the existing strict input,
+strict success output, and write/non-destructive/idempotent/closed-world
+annotations. The composition root reuses the M7-A command and transactional
+adapter. The shared invocation boundary supplies trusted context, response
+`meta.requestId`, safe errors, and content-free structured logs. M7-A transaction,
+audit, and retry semantics remain unchanged; no second write path is introduced.
+
+MCP contract tests cover discovery, SDK validation before application work,
+owner/member access, viewer denial, output shape, safe errors, context/request IDs,
+and log privacy. Compiled PostgreSQL stdio tests verify creation, idempotent retry,
+tenant isolation, live authorization changes, conflicts, atomic rollback,
+concurrent duplicate/conflicting sessions, audit correlation, restricted runtime
+credentials, and protocol-only stdout. All seven read-only tools retain their
+existing behavior and regression tests. Milestone 8 is not started.
 
 ---
 

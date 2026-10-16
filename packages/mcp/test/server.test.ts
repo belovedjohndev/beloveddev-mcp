@@ -18,12 +18,14 @@ import { GetBlockers } from '@beloveddev/application/use-cases/get-blockers';
 import { SearchProjectEvidence } from '@beloveddev/application/use-cases/search-project-evidence';
 import { ListOpportunities } from '@beloveddev/application/use-cases/list-opportunities';
 import { EvaluateOpportunity } from '@beloveddev/application/use-cases/evaluate-opportunity';
+import { CreateProjectNote } from '@beloveddev/application/use-cases/create-project-note';
 import { EvaluationPolicyV1 } from '@beloveddev/domain/evaluation-policy-v1';
 import type {
   OpportunityListQuery,
   OpportunityPage,
   OpportunityRepository,
   EvidenceRepository,
+  ProjectNoteCreationRepository,
 } from '@beloveddev/application/repositories';
 import type { Opportunity } from '@beloveddev/domain/entities';
 import { SignedCursorCodec } from '@beloveddev/infrastructure/signed-cursor';
@@ -54,6 +56,7 @@ describe('MCP SDK and application contracts', () => {
     searchProjectEvidence: SearchProjectEvidence;
     listOpportunities: ListOpportunities;
     evaluateOpportunity: EvaluateOpportunity;
+    createProjectNote: CreateProjectNote;
   };
   let opportunity: Opportunity;
   let listOpportunityPage: ReturnType<
@@ -62,6 +65,7 @@ describe('MCP SDK and application contracts', () => {
   let resolve: ReturnType<typeof vi.fn<(requestId: string) => Promise<RequestContext | null>>>;
   let getOpportunityById: ReturnType<typeof vi.fn<OpportunityRepository['getById']>>;
   let evaluationSearch: ReturnType<typeof vi.fn<EvidenceRepository['search']>>;
+  let createNote: ReturnType<typeof vi.fn<ProjectNoteCreationRepository['create']>>;
 
   beforeEach(async () => {
     fixture = createReadFixture();
@@ -123,6 +127,21 @@ describe('MCP SDK and application contracts', () => {
         nextPosition: null,
       });
     });
+    createNote = vi.fn((input) => {
+      fixture.calls.push({ method: 'createNote', input });
+      return Promise.resolve({
+        note: {
+          ...fixture.note,
+          tenantId: input.tenantId,
+          authorUserId: input.authorUserId,
+          projectId: input.projectId,
+          category: input.category,
+          content: input.content,
+          idempotencyKey: input.idempotencyKey,
+        },
+        created: true,
+      });
+    });
     useCases = {
       getProfile: new GetProfile(r.profiles, authorization),
       listProjects: new ListProjects(r.projects, authorization, cursors),
@@ -142,6 +161,7 @@ describe('MCP SDK and application contracts', () => {
         },
         authorization,
       ),
+      createProjectNote: new CreateProjectNote({ create: createNote }, authorization),
     };
     resolve = vi.fn((requestId: string) =>
       Promise.resolve(principal === null ? null : { ...principal, requestId }),
@@ -165,7 +185,7 @@ describe('MCP SDK and application contracts', () => {
     await server?.close();
   });
 
-  it('advertises exactly seven read-only tools with strict input and success-output schemas', async () => {
+  it('advertises seven read-only tools and one idempotent mutation with strict schemas', async () => {
     const listed = await client.listTools();
     expect(listed.tools.map((tool) => tool.name)).toEqual([
       'get_profile',
@@ -175,10 +195,11 @@ describe('MCP SDK and application contracts', () => {
       'get_blockers',
       'list_opportunities',
       'evaluate_opportunity',
+      'create_project_note',
     ]);
     for (const tool of listed.tools) {
       expect(tool.annotations).toMatchObject({
-        readOnlyHint: true,
+        readOnlyHint: tool.name !== 'create_project_note',
         destructiveHint: false,
         idempotentHint: true,
         openWorldHint: false,
@@ -211,6 +232,38 @@ describe('MCP SDK and application contracts', () => {
       type: 'string',
       format: 'uuid',
     });
+    const mutation = listed.tools.find((tool) => tool.name === 'create_project_note');
+    expect(mutation?.description).toMatch(
+      /current tenant.*audit.*transaction.*project_notes:create.*idempotencyKey.*created=false/i,
+    );
+    expect(mutation?.description).toMatch(/writes to PostgreSQL/i);
+    expect(Object.keys(mutation?.inputSchema.properties ?? {})).toEqual([
+      'projectId',
+      'category',
+      'content',
+      'idempotencyKey',
+    ]);
+    expect(mutation?.inputSchema.required).toEqual([
+      'projectId',
+      'category',
+      'content',
+      'idempotencyKey',
+    ]);
+    expect(mutation?.inputSchema.properties?.['projectId']).toMatchObject({
+      type: 'string',
+      format: 'uuid',
+    });
+    expect(mutation?.inputSchema.properties?.['content']).toMatchObject({
+      type: 'string',
+      minLength: 1,
+      maxLength: 10_000,
+    });
+    expect(mutation?.inputSchema.properties?.['idempotencyKey']).toMatchObject({
+      type: 'string',
+      minLength: 8,
+      maxLength: 128,
+    });
+    expect(mutation?.outputSchema).toHaveProperty('additionalProperties', false);
   });
 
   it.each([
@@ -259,6 +312,7 @@ describe('MCP SDK and application contracts', () => {
         vi.spyOn(useCases.searchProjectEvidence, 'execute'),
         vi.spyOn(useCases.listOpportunities, 'execute'),
         vi.spyOn(useCases.evaluateOpportunity, 'execute'),
+        vi.spyOn(useCases.createProjectNote, 'execute'),
       ];
       const result = await client.callTool({
         name,
@@ -386,6 +440,240 @@ describe('MCP SDK and application contracts', () => {
       requestId: payload.error.requestId,
     });
     expect(fixture.calls).toEqual([]);
+  });
+
+  function noteInput() {
+    return {
+      projectId: fixture.project.id,
+      category: 'technical' as const,
+      content: '  MCP_NOTE_SENSITIVE client context 🚀\n  code  ',
+      idempotencyKey: 'mcp-note-key-001',
+    };
+  }
+
+  it.each([
+    { projectId: 'invalid' },
+    { category: 'invalid' },
+    { content: '' },
+    { content: ' \n\t' },
+    { content: 'x'.repeat(10_001) },
+    { content: 'invalid\0text' },
+    { content: 'invalid\uD800text' },
+    { idempotencyKey: 'short' },
+    { idempotencyKey: ' '.repeat(8) },
+    { idempotencyKey: 'x'.repeat(129) },
+    { idempotencyKey: 'invalid\0key' },
+    { idempotencyKey: 'invalid\uDFFFkey' },
+    { tenantId: fixtureId(99) },
+    { authorUserId: fixtureId(99) },
+    { userId: fixtureId(99) },
+    { membershipId: fixtureId(99) },
+    { requestId: fixtureId(99) },
+    { role: 'owner' },
+    { permissions: ['project_notes:create'] },
+    { audit: { action: 'project_note.created' } },
+    { createdAt: '2026-01-01T00:00:00Z' },
+    { noteId: fixtureId(99) },
+  ])('SDK rejects malformed mutation input before invocation: %j', async (change) => {
+    const execute = vi.spyOn(useCases.createProjectNote, 'execute');
+    const result = await client.callTool({
+      name: 'create_project_note',
+      arguments: { ...noteInput(), ...change },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(execute).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(createNote).not.toHaveBeenCalled();
+    expect(fixture.calls).toEqual([]);
+    expect(logs).toEqual([]);
+  });
+
+  it.each(['projectId', 'category', 'content', 'idempotencyKey'] as const)(
+    'SDK requires mutation %s',
+    async (field) => {
+      const args: Record<string, unknown> = noteInput();
+      delete args[field];
+      const result = await client.callTool({ name: 'create_project_note', arguments: args });
+      expect(result.isError).toBe(true);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(createNote).not.toHaveBeenCalled();
+      expect(logs).toEqual([]);
+    },
+  );
+
+  it.each(['owner', 'member'] as const)(
+    'invokes note creation with trusted %s context and safe logs',
+    async (role) => {
+      const trusted = { ...fixture.context, role, permissions: permissionsForRole(role) };
+      principal = trusted;
+      const execute = vi.spyOn(useCases.createProjectNote, 'execute');
+      const args = noteInput();
+      const result = await client.callTool({ name: 'create_project_note', arguments: args });
+      const output = toolSchemas.create_project_note.output.parse(result.structuredContent);
+      expect(result.isError).not.toBe(true);
+      expect(output).toEqual({
+        note: {
+          id: fixture.note.id,
+          projectId: args.projectId,
+          category: args.category,
+          content: args.content,
+          createdAt: fixture.note.createdAt.toISOString(),
+        },
+        created: true,
+        meta: { requestId: resolve.mock.calls[0]?.[0] },
+      });
+      const first = result.content[0];
+      if (first?.type !== 'text') throw new Error('Expected note JSON response');
+      expect(JSON.parse(first.text)).toEqual(output);
+      expect(execute).toHaveBeenCalledExactlyOnceWith(
+        { ...trusted, requestId: output.meta.requestId },
+        args,
+      );
+      expect(createNote).toHaveBeenCalledExactlyOnceWith({
+        ...args,
+        tenantId: trusted.tenantId,
+        authorUserId: trusted.userId,
+        requestId: output.meta.requestId,
+      });
+      expect(Object.keys(output.note).sort()).toEqual(
+        ['id', 'projectId', 'category', 'content', 'createdAt'].sort(),
+      );
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toMatchObject({
+        event: 'mcp.invocation',
+        requestId: output.meta.requestId,
+        toolName: 'create_project_note',
+        actorUserId: trusted.userId,
+        tenantId: trusted.tenantId,
+        resultStatus: 'success',
+      });
+      expect(logs[0]?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(logs[0]).not.toHaveProperty('errorCategory');
+      expect(JSON.stringify(logs)).not.toContain('MCP_NOTE_SENSITIVE');
+      expect(JSON.stringify(logs)).not.toContain(args.idempotencyKey);
+    },
+  );
+
+  it.each(['missing', 'viewer', 'without permission'] as const)(
+    'denies mutation for %s context before repository work',
+    async (kind) => {
+      principal =
+        kind === 'missing'
+          ? null
+          : {
+              ...fixture.context,
+              role: kind === 'viewer' ? 'viewer' : 'owner',
+              permissions: kind === 'viewer' ? permissionsForRole('viewer') : ['projects:read'],
+            };
+      const payload = errorPayload(
+        await client.callTool({ name: 'create_project_note', arguments: noteInput() }),
+      );
+      const code = kind === 'missing' ? 'UNAUTHENTICATED' : 'FORBIDDEN';
+      expect(payload.error.code).toBe(code);
+      expect(logs[0]).toMatchObject({
+        requestId: payload.error.requestId,
+        toolName: 'create_project_note',
+        errorCategory: code,
+        resultStatus: 'error',
+      });
+      expect(createNote).not.toHaveBeenCalled();
+      expect(fixture.calls).toEqual([]);
+    },
+  );
+
+  it('preserves the original retry result while generating fresh invocation metadata', async () => {
+    const args = noteInput();
+    const first = toolSchemas.create_project_note.output.parse(
+      (await client.callTool({ name: 'create_project_note', arguments: args })).structuredContent,
+    );
+    createNote.mockResolvedValueOnce({
+      note: {
+        ...fixture.note,
+        projectId: args.projectId,
+        content: args.content,
+        category: args.category,
+      },
+      created: false,
+    });
+    const retry = toolSchemas.create_project_note.output.parse(
+      (await client.callTool({ name: 'create_project_note', arguments: args })).structuredContent,
+    );
+    expect(retry.note).toEqual(first.note);
+    expect(retry.created).toBe(false);
+    expect(retry.meta.requestId).not.toBe(first.meta.requestId);
+    expect(logs.map(({ requestId }) => requestId)).toEqual([
+      first.meta.requestId,
+      retry.meta.requestId,
+    ]);
+  });
+
+  it.each(['NOT_FOUND', 'CONFLICT', 'VALIDATION_ERROR', 'INTERNAL_ERROR'] as const)(
+    'maps mutation %s to a safe application envelope without success content',
+    async (code) => {
+      if (code === 'NOT_FOUND') createNote.mockResolvedValueOnce(null);
+      else if (code === 'CONFLICT')
+        createNote.mockRejectedValueOnce(new RepositoryError('CONFLICT'));
+      else if (code === 'VALIDATION_ERROR')
+        vi.spyOn(useCases.createProjectNote, 'execute').mockRejectedValueOnce(
+          new ApplicationError('VALIDATION_ERROR'),
+        );
+      else
+        createNote.mockRejectedValueOnce(
+          new Error('SQL password=private-db-secret C:\\private\\database'),
+        );
+      const result = await client.callTool({ name: 'create_project_note', arguments: noteInput() });
+      const payload = errorPayload(result);
+      expect(payload.error.code).toBe(code);
+      expect(logs[0]).toMatchObject({
+        requestId: payload.error.requestId,
+        toolName: 'create_project_note',
+        resultStatus: 'error',
+        errorCategory: code,
+      });
+      expect(JSON.stringify({ result, logs })).not.toMatch(
+        /private-db-secret|private\\\\database|MCP_NOTE_SENSITIVE|mcp-note-key-001/,
+      );
+    },
+  );
+
+  it('maps a mutation context-provider failure without accessing the write port', async () => {
+    resolve.mockRejectedValueOnce(new Error('private identity provider failure'));
+    const payload = errorPayload(
+      await client.callTool({ name: 'create_project_note', arguments: noteInput() }),
+    );
+    expect(payload.error.code).toBe('INTERNAL_ERROR');
+    expect(payload.error.requestId).toBe(logs[0]?.requestId);
+    expect(createNote).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed mutation output and keeps internal note fields private', async () => {
+    const result = await useCases.createProjectNote.execute(principal, noteInput());
+    const valid = { ...result, meta: { requestId: fixtureId(1) } };
+    const schema = toolSchemas.create_project_note.output;
+    for (const output of [
+      { ...valid, created: 'true' },
+      { note: valid.note, meta: valid.meta },
+      { ...valid, note: { ...valid.note, id: 'invalid' } },
+      { ...valid, note: { ...valid.note, projectId: 'invalid' } },
+      { ...valid, note: { ...valid.note, category: 'invalid' } },
+      { ...valid, note: { ...valid.note, content: '' } },
+      { ...valid, note: { ...valid.note, content: 'x'.repeat(10_001) } },
+      { ...valid, note: { ...valid.note, createdAt: 'invalid' } },
+      { ...valid, note: { ...valid.note, tenantId: fixture.context.tenantId } },
+      { ...valid, note: { ...valid.note, authorUserId: fixture.context.userId } },
+      { ...valid, note: { ...valid.note, idempotencyKey: 'private-key' } },
+      { ...valid, tenantId: fixture.context.tenantId },
+      { ...valid, meta: { requestId: 'invalid' } },
+    ])
+      expect(schema.safeParse(output).success).toBe(false);
+    const internal = { ...result, note: { ...result.note, authorUserId: fixture.context.userId } };
+    vi.spyOn(useCases.createProjectNote, 'execute').mockResolvedValueOnce(internal);
+    const payload = errorPayload(
+      await client.callTool({ name: 'create_project_note', arguments: noteInput() }),
+    );
+    expect(payload.error.code).toBe('INTERNAL_ERROR');
+    expect(payload.error.requestId).toBe(logs.at(-1)?.requestId);
   });
 
   it('get_profile returns NOT_FOUND without exposing foreign profiles', async () => {

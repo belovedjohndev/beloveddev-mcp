@@ -2,13 +2,13 @@
 
 ## Scope and package boundaries
 
-Exactly ten tables are implemented: tenants, users, tenant_memberships,
+Exactly eleven tables are implemented: tenants, users, tenant_memberships,
 developer_profiles, clients, projects, project_evidence, project_blockers, and
-project_notes, plus opportunities. The executable composes the implemented
-read-only MCP tools; opportunity listing remains application-only in Milestone 5-A.
+project_notes, opportunities, and audit_logs. The executable composes seven
+read-only MCP tools and the transactional `create_project_note` mutation.
 
 - `domain/entities` defines portable records and status/role values.
-- `application/repositories` defines eight explicit repository contracts.
+- `application/repositories` defines explicit repository contracts.
 - `database/schema` contains Drizzle definitions; `database/client` owns pools.
 - `infrastructure/postgres` implements scoped queries and safe failures.
 - `test-support` provisions disposable databases and reusable two-tenant fixtures.
@@ -305,7 +305,7 @@ GRANT USAGE ON SCHEMA public TO beloveddev_runtime;
 GRANT SELECT ON tenant_memberships, developer_profiles, clients, projects,
   project_evidence, project_blockers, project_notes, opportunities TO beloveddev_runtime;
 GRANT SELECT (id, status) ON tenants, users TO beloveddev_runtime;
--- Only for a process invoking the M7-A application command:
+-- Required for the create_project_note MCP tool (M7-B):
 GRANT INSERT ON project_notes, audit_logs TO beloveddev_runtime;
 ```
 
@@ -317,8 +317,11 @@ operations; note creation itself does not require INSERT on projects.
 The test helper's `projectNoteWrites` option adds note/audit INSERT while preserving
 earlier grants, including the internal project creation primitive. The note-write
 suite explicitly revokes project INSERT to verify this command's narrower needs.
-The option defaults off; existing stdio smoke tests keep read-only
-credentials and no note/audit INSERT grants. Grants remain deployment provisioning
+The option defaults off; the seven-tool read-only stdio regression tests keep
+read-only credentials and no note/audit INSERT grants. M7-B mutation stdio tests
+opt in to note/audit insertion through the same restricted role configuration.
+Startup does not grant privileges: a role missing either INSERT grant receives
+a safe INTERNAL_ERROR and no partial creation. Grants remain deployment provisioning
 instructions, not environment-specific schema migrations.
 
 ## Real PostgreSQL integration tests

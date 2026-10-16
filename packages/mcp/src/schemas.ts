@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { applicationErrorCodes } from '@beloveddev/application/application-error';
+import { createProjectNoteInput } from '@beloveddev/application/write-inputs';
 import {
   getProfileInput,
   listProjectsInput,
@@ -63,6 +64,22 @@ export const safeErrorSchema = z.strictObject({
 });
 
 export const toolSchemas = {
+  create_project_note: {
+    description:
+      'Append a note to a project in the current tenant and durably audit the creation in one PostgreSQL transaction. Requires project_notes:create (owner/member). Supply projectId, category, nonblank exact content (1–10000 UTF-16 units), and a nonblank idempotencyKey (8–128 UTF-16 units). Reuse the same key with identical project/category/content to return the original note with created=false and no additional audit; different payloads conflict. Preserves content, including whitespace. Writes to PostgreSQL; makes no external calls and never updates or deletes existing notes.',
+    input: createProjectNoteInput,
+    output: z.strictObject({
+      note: z.strictObject({
+        id,
+        projectId: id,
+        category: z.enum(noteCategories),
+        content: createProjectNoteInput.shape.content,
+        createdAt: date,
+      }),
+      created: z.boolean(),
+      meta,
+    }),
+  },
   evaluate_opportunity: {
     description:
       'Evaluate one stored opportunity by UUID against the current tenant profile and up to 10 retrieved project evidence results using deterministic v1 rules. Returns strengths, skill gaps, risks, and a recommendation. Read-only; requires opportunities:evaluate (owner/member). Budget is not comparable and remains null; evidence_retrieval_incomplete flags partial retrieval. Makes no changes and calls no LLM.',

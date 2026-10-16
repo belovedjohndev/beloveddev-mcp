@@ -17,6 +17,7 @@ import { GetBlockers } from '@beloveddev/application/use-cases/get-blockers';
 import { SearchProjectEvidence } from '@beloveddev/application/use-cases/search-project-evidence';
 import { ListOpportunities } from '@beloveddev/application/use-cases/list-opportunities';
 import { EvaluateOpportunity } from '@beloveddev/application/use-cases/evaluate-opportunity';
+import { CreateProjectNote } from '@beloveddev/application/use-cases/create-project-note';
 import { LocalRequestContextProvider } from '@beloveddev/infrastructure/local-request-context';
 import { SignedCursorCodec } from '@beloveddev/infrastructure/signed-cursor';
 import { PostgresMembershipRepository } from '@beloveddev/infrastructure/postgres/membership-repository';
@@ -26,6 +27,7 @@ import { PostgresClientRepository } from '@beloveddev/infrastructure/postgres/cl
 import { PostgresEvidenceRepository } from '@beloveddev/infrastructure/postgres/evidence-repository';
 import { PostgresBlockerRepository } from '@beloveddev/infrastructure/postgres/blocker-repository';
 import { PostgresNoteRepository } from '@beloveddev/infrastructure/postgres/note-repository';
+import { PostgresProjectNoteCreationRepository } from '@beloveddev/infrastructure/postgres/project-note-creation-repository';
 import { PostgresOpportunityRepository } from '@beloveddev/infrastructure/postgres/opportunity-repository';
 import { createMcpServer } from '@beloveddev/mcp/server';
 
@@ -85,6 +87,10 @@ try {
     listOpportunities: new ListOpportunities(opportunities, authorization, cursors),
     evaluateOpportunity: new EvaluateOpportunity(
       { opportunities, profiles, evidence },
+      authorization,
+    ),
+    createProjectNote: new CreateProjectNote(
+      new PostgresProjectNoteCreationRepository(database.db),
       authorization,
     ),
   };

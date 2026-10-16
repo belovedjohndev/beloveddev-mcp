@@ -1,6 +1,6 @@
 # BelovedDev MCP V1 — Architecture
 
-## Implemented architecture through Milestone 7-A
+## Implemented architecture through Milestone 7-B
 
 The stdio executable composes trusted local request context, application use
 cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
@@ -17,7 +17,8 @@ Missing and cross-tenant lookups return null; knowledge listings return empty ar
 categories without raw SQL causes. Project creation is one atomic INSERT with a
 composite client ownership foreign key. It is an internal persistence operation.
 Milestone 7-A adds authorized, audited project-note creation in the application
-and infrastructure layers; mutation exposure through MCP remains deferred.
+and infrastructure layers. Milestone 7-B exposes that command through MCP without
+changing its transaction or idempotency semantics.
 
 Real PostgreSQL tests apply migrations to fresh databases and use a restricted
 runtime login for repository queries, separate from migration/fixture credentials.
@@ -479,8 +480,30 @@ this slice does not introduce a new identity or revocation mechanism.
 The additive audit migration preserves historical notes and adds a composite
 note key to enforce audit tenant/resource/actor integrity. Runtime privileges are
 SELECT on required existing resources plus INSERT on notes and audits, with no
-unrelated writes or audit reads. The seven existing MCP registrations and their
-read-only runtime remain unchanged. M7-B will wire the mutation interface.
+unrelated writes or audit reads. The seven existing read registrations retain
+their schemas, handlers, and annotations.
+
+### Implemented M7-B interface
+
+`create_project_note` uses explicit high-level `McpServer.registerTool()` with
+the existing strict application input schema and a strict success schema.
+It is marked readOnly=false, destructive=false, idempotent=true, openWorld=false.
+The composition root constructs `CreateProjectNote` with the existing
+`PostgresProjectNoteCreationRepository` and shared authorization, using the same
+database connection infrastructure. There is one write path and no handler SQL.
+
+The shared invocation wrapper generates the request ID, resolves trusted context,
+validates success output, and returns matching JSON content and structuredContent
+with `meta.requestId`. The original creation audit contains that invocation ID;
+an identical retry has fresh response metadata but adds no audit. Application
+failures keep the safe error envelope without success structuredContent. SDK
+schema rejection occurs before context resolution or application execution.
+
+Invocation logs record request/tool/actor/tenant/duration/status/error category;
+they exclude note content, keys, and full request/response bodies. Stdio mutation
+tests use a restricted role with note/audit INSERT and verify real commits,
+retries, conflicts, authorization, rollback, concurrent sessions, and protocol-only
+stdout. The separate read-only stdio regression suite retains SELECT-only grants.
 
 ## 13. Idempotency Model
 

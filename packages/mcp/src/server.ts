@@ -16,9 +16,10 @@ import type { GetBlockers } from '@beloveddev/application/use-cases/get-blockers
 import type { SearchProjectEvidence } from '@beloveddev/application/use-cases/search-project-evidence';
 import type { ListOpportunities } from '@beloveddev/application/use-cases/list-opportunities';
 import type { EvaluateOpportunity } from '@beloveddev/application/use-cases/evaluate-opportunity';
+import type { CreateProjectNote } from '@beloveddev/application/use-cases/create-project-note';
 import { safeErrorSchema, toolSchemas, type ToolName } from './schemas.js';
 
-export interface ReadUseCases {
+export interface McpUseCases {
   readonly getProfile: Pick<GetProfile, 'execute'>;
   readonly listProjects: Pick<ListProjects, 'execute'>;
   readonly getProject: Pick<GetProject, 'execute'>;
@@ -26,6 +27,7 @@ export interface ReadUseCases {
   readonly searchProjectEvidence: Pick<SearchProjectEvidence, 'execute'>;
   readonly listOpportunities: Pick<ListOpportunities, 'execute'>;
   readonly evaluateOpportunity: Pick<EvaluateOpportunity, 'execute'>;
+  readonly createProjectNote: Pick<CreateProjectNote, 'execute'>;
 }
 export interface InvocationLog {
   readonly event: 'mcp.invocation';
@@ -42,7 +44,7 @@ export interface InvocationLogger {
 }
 
 export function createMcpServer(dependencies: {
-  useCases: ReadUseCases;
+  useCases: McpUseCases;
   context: RequestContextProvider;
   logger: InvocationLogger;
 }): McpServer {
@@ -186,6 +188,24 @@ export function createMcpServer(dependencies: {
     (input) =>
       invoke('evaluate_opportunity', (context) =>
         dependencies.useCases.evaluateOpportunity.execute(context, input),
+      ),
+  );
+  server.registerTool(
+    'create_project_note',
+    {
+      description: toolSchemas.create_project_note.description,
+      inputSchema: toolSchemas.create_project_note.input,
+      outputSchema: toolSchemas.create_project_note.output,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    (input) =>
+      invoke('create_project_note', (context) =>
+        dependencies.useCases.createProjectNote.execute(context, input),
       ),
   );
   return server;
