@@ -1,10 +1,33 @@
 # BelovedDev MCP V1 — Architecture
 
-## Implemented architecture through Milestone 8-C
+## Implemented architecture through Milestone 8-D
 
 The stdio executable composes trusted local request context, application use
 cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
 logging. Database setup remains an explicit migration CLI action.
+
+M8-D gates the SDK server factory and `mcp.ready` on a read-only database probe.
+One 10-second total budget covers connection acquisition, configured database/role
+identity verification, PostgreSQL 18 schema
+compatibility (migration ledger and reviewed catalog signature), and effective
+least-privilege checks. The transport still observes EOF during the probe;
+queued requests cannot reach context resolution/use cases until it succeeds.
+Failure destroys the probe connection and uses M8-C cleanup. Signals/EOF during
+startup do not produce false readiness. Pool acquisition, statement timeouts,
+admission/draining, and uncertain committed-write outcomes remain unchanged.
+
+The database adapter parses an allowlisted connection URL into explicit pg
+fields. Remote endpoints require verified TLS 1.2+ with hostname validation;
+only explicit loopback permits plaintext. Optional `DATABASE_TLS_CA` supplies
+private trust roots. There is no permissive SSL fallback, session-role URL
+override, ambient PG* override, or runtime migration/privilege escalation. Runtime
+checks account for PUBLIC and inherited/SET ROLE access, column grants, ownership,
+privileged role attributes, and callable user SECURITY DEFINER routines. All
+eight tools require the full documented runtime grants, including append-only
+note/audit writes and read-only migration metadata. These are startup snapshots,
+not continuous enforcement or protection from a hostile database administrator.
+There is still no RLS, HTTP transport, or new authentication mode. See the
+[database security policy](database.md#m8-d-connection-and-readiness-policy).
 
 M8-B documents and verifies direct Node execution of the compiled composition
 root: `node --env-file=.env apps/mcp-server/dist/main.js` from the repository root.
@@ -541,7 +564,8 @@ Invocation logs record request/tool/actor/tenant/duration/status/error category;
 they exclude note content, keys, and full request/response bodies. Stdio mutation
 tests use a restricted role with note/audit INSERT and verify real commits,
 retries, conflicts, authorization, rollback, concurrent sessions, and protocol-only
-stdout. The separate read-only stdio regression suite retains SELECT-only grants.
+stdout. Both stdio suites use the full restricted eight-tool runtime grants;
+authorization still determines which principals may invoke the mutation.
 
 ## 13. Idempotency Model
 

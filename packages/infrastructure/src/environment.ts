@@ -16,6 +16,7 @@ const environmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   LOG_LEVEL: logLevelSchema.default('info'),
   DATABASE_URL: databaseUrlSchema,
+  DATABASE_TLS_CA: z.string().min(1).max(65_536).optional(),
 });
 
 export type Environment = Readonly<z.infer<typeof environmentSchema>>;

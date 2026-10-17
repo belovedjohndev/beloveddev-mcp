@@ -10,6 +10,7 @@ const sensitiveKeys = [
   'authorization',
   'cookie',
   'DATABASE_URL',
+  'DATABASE_TLS_CA',
   'databaseUrl',
   'MCP_CURSOR_SECRET',
   'cursorSecret',

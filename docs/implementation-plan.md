@@ -662,6 +662,39 @@ transaction/idempotency semantics remain unchanged.
 M8 as a whole remains unfinished. This slice adds no HTTP transport, authentication
 system, migration, automatic process restart, or unrelated hardening feature.
 
+### Milestone 8-D — Database policy and bounded readiness (implemented)
+
+The local stdio SDK factory and `mcp.ready` wait for a single read-only startup
+probe, bounded to 10 seconds including connection acquisition. PostgreSQL 18,
+the configured database and session/active role identities,
+the complete committed migration ledger, and a reviewed catalog schema signature
+must match. Effective grants must supply all eight tools' narrow reads and
+append-only note/audit writes without dangerous role attributes, ownership,
+PUBLIC/inherited/SET ROLE escalation, excess table/column grants, grant options,
+sequence access, schema/database creation, temporary objects, or callable user
+SECURITY DEFINER functions. Provisioning is an explicit administrator action;
+startup never migrates, grants, mutates, or retries. Migration and runtime
+credentials remain separate. Runtime gets SELECT on migration metadata only.
+
+Remote database transport requires verify-full certificate/hostname validation
+and TLS 1.2 minimum, with optional private-CA PEM configuration. Plaintext is
+restricted to explicit loopback; URL and ambient PG* overrides cannot weaken
+transport, choose a different endpoint, or change session roles. Startup errors
+remain static safe stderr diagnostics. EOF/signals/fatal database errors keep
+the M8-C shutdown path, and no application operation starts before readiness.
+
+Focused deterministic tests cover transport policy, probe deadline/late-client
+cleanup, and startup closure/failure. Real PostgreSQL tests cover accepted and
+rejected role grants, schema/ledger drift, failed process readiness, and verified
+TLS including untrusted certificates and hostname mismatch. Existing eight-tool,
+authorization, tenant, audited mutation, idempotency, and lifecycle tests remain.
+
+M8 remains unfinished: no production-authentication approval, RLS, HTTP/OAuth,
+migration, new tool contract, automatic mutation retry, packaging, backup/restore
+automation, or unrelated operational feature is included. Startup checks cannot
+prevent a trusted administrator from changing grants/schema after readiness or
+protect stolen runtime credentials across tenants.
+
 ---
 
 ## 11. Milestone 9 — Portfolio Documentation

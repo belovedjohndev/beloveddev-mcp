@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./tls-database": {
+      "types": "./dist/tls-database.d.ts",
+      "import": "./dist/tls-database.js"
+    },
     "./test-database": {
       "types": "./dist/test-database.d.ts",
       "import": "./dist/test-database.js"

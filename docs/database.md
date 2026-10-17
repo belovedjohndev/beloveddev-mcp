@@ -291,17 +291,34 @@ without reapplying recorded migrations. Run one migration process at a time.
 Schema push is not part of this workflow.
 
 Database URLs are supplied per process. Migration commands require an owner/migration
-role. Future application processes must use a separate restricted role. Deployment
+role. The stdio application must use a separate restricted role. Deployment
 must include the migrations directory beside the database package's `dist` directory.
+
+Keep administrator settings in a separate protected file, outside the runtime
+launcher configuration. After `npm run build`, run the migration script directly
+with that file, for example `node --env-file=/absolute/migrations.env scripts/migrate.ts`.
+Use `docker compose --env-file=/absolute/database.env up -d --wait` for Compose
+administration once the repository `.env` contains only runtime settings.
+Integration verification needs `TEST_DATABASE_URL` injected into the test process
+from the administrative configuration; never inject that variable or Compose's
+administrator password into the MCP subprocess. Existing process values override
+env-file values, so clear stale administrator `DATABASE_URL` exports before launching
+the server. The readiness gate will reject an accidentally inherited privileged URL.
 
 For a local runtime role, provision privileges outside schema migrations so
 environment-specific credentials are never committed. For example, using psql
 against the target database as its administrator:
 
 ```sql
-CREATE ROLE beloveddev_runtime LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+CREATE ROLE beloveddev_runtime LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+  NOREPLICATION NOBYPASSRLS;
 \password beloveddev_runtime
-GRANT USAGE ON SCHEMA public TO beloveddev_runtime;
+-- Replace beloveddev with the actual application database identifier.
+REVOKE CREATE, TEMPORARY ON DATABASE beloveddev FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT CONNECT ON DATABASE beloveddev TO beloveddev_runtime;
+GRANT USAGE ON SCHEMA public, drizzle TO beloveddev_runtime;
+GRANT SELECT ON drizzle.__drizzle_migrations TO beloveddev_runtime;
 GRANT SELECT ON tenant_memberships, developer_profiles, clients, projects,
   project_evidence, project_blockers, project_notes, opportunities TO beloveddev_runtime;
 GRANT SELECT (id, status) ON tenants, users TO beloveddev_runtime;
@@ -309,20 +326,102 @@ GRANT SELECT (id, status) ON tenants, users TO beloveddev_runtime;
 GRANT INSERT ON project_notes, audit_logs TO beloveddev_runtime;
 ```
 
-Use a fresh non-owner role with no inherited write grants; do not grant UPDATE,
-DELETE, TRUNCATE, schema CREATE, unrelated INSERT, or SELECT on audit_logs.
-Supply its credentials to the application and keep owner credentials for
-migrations. Existing installations should retain grants required by earlier
-operations; note creation itself does not require INSERT on projects.
-The test helper's `projectNoteWrites` option adds note/audit INSERT while preserving
-earlier grants, including the internal project creation primitive. The note-write
-suite explicitly revokes project INSERT to verify this command's narrower needs.
-The option defaults off; the seven-tool read-only stdio regression tests keep
-read-only credentials and no note/audit INSERT grants. M7-B mutation stdio tests
-opt in to note/audit insertion through the same restricted role configuration.
-Startup does not grant privileges: a role missing either INSERT grant receives
-a safe INTERNAL_ERROR and no partial creation. Grants remain deployment provisioning
-instructions, not environment-specific schema migrations.
+Use a fresh non-owner role without additional grants or role memberships. Do not
+grant UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN, schema/database CREATE,
+TEMPORARY, sequence access, unrelated INSERT, SELECT on audit_logs, or grant options.
+The runtime must not own database/schema/table/type/function objects or reach a
+privileged role through inheritance or SET ROLE. Callable user-defined SECURITY
+DEFINER functions are rejected. PUBLIC grants count as effective privileges.
+System-schema CREATE and ownership are rejected too. System table/column and
+builtin-function capabilities are limited to PostgreSQL's initial PUBLIC grants
+recorded in `pg_init_privs` (or its default ACL where no initial override exists).
+The SQL-standard `information_schema` has no recorded initial ACLs; its metadata
+SELECT access is permitted explicitly, while extra writes/grant options are denied.
+Extra credential-catalog reads, catalog writes, privileged builtin execution, and
+grant options fail readiness, including grants supplied through PUBLIC or roles.
+Keep migration/administrator credentials out of the runtime process environment.
+Both stdio suites now use `mcpRuntime: true` provisioning: all eight tools require
+the two append-only INSERT grants even when a particular principal is read-only.
+Older repository fixtures retain their internal project-insert grant and are
+intentionally not suitable for the MCP executable. No grants run during startup.
+
+### M8-D connection and readiness policy
+
+The supported database major is PostgreSQL 18. Before `mcp.ready` or application
+request handling, one 10-second deadline covers acquisition and read-only checks:
+
+- A working connection to a writable primary, with default read-write transactions.
+- Reported database, session role, and active role matching the explicit database
+  and user configured on the physical pg client. Mismatches fail with a static
+  `IDENTITY` category; names and credentials are not logged. Proxies must preserve
+  these identities rather than silently routing to another database or login role.
+- The committed migration ledger's complete ordered hashes and timestamps.
+- A reviewed catalog SHA-256 signature of the public relations, columns/types,
+  defaults, generated expressions, constraints, indexes, enum order, RLS flags,
+  triggers and rewrite rules. Missing, modified, or future schema fails closed.
+- Effective required and forbidden privileges, including column grants, PUBLIC,
+  inherited/NOINHERIT membership paths, ownership, and privileged role attributes.
+
+Checks run in a read-only transaction and roll back. Failure/timeout destroys the
+probe connection; a connection acquired after expiry is also destroyed. No tool
+can resolve context or access repositories before this gate. Startup failures
+log only safe categories and use the M8-C cleanup path. EOF/signals during the
+probe still shut down normally; fatal pool failures retain nonzero exit status.
+The existing 5-second connection, 10-second statement, and 15-second shutdown
+bounds remain. There is no HTTP health endpoint. Protocol initialization/tool
+discovery only become available after the gate; `mcp.ready` is the stderr
+operational signal when info logging is enabled.
+
+The schema signature is deliberately strict for a dedicated application database.
+After an approved schema change, review the catalog query and regenerate its
+constant from a fresh database migrated from committed SQL, never from a live
+database with unexplained drift. Deploy reviewed migrations with a separate
+administrator process before starting the runtime. Package the unchanged
+`packages/database/migrations` alongside `dist`; startup reads these files but
+never applies migrations, repairs schema, or grants itself permissions.
+The deployed SQL bytes (including line endings) must match the artifacts used
+by the migrator, because Drizzle records hashes of those exact bytes.
+
+| Configured endpoint             | Transport setting                                    | Result                                                     |
+| ------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------- |
+| Explicit loopback, no custom CA | SSL mode absent or `disable`                         | Plaintext allowed under local-host trust                   |
+| Any endpoint                    | `verify-full`                                        | TLS 1.2+, certificate-chain and host verification required |
+| Non-loopback                    | SSL mode absent or `disable`                         | Rejected                                                   |
+| Any endpoint with a custom CA   | Any mode other than `verify-full`                    | Rejected                                                   |
+| Any endpoint                    | Unverified/ambiguous modes or overriding URL options | Rejected                                                   |
+
+The loopback exception trusts the OS/network namespace and the local PostgreSQL
+endpoint. It provides neither channel encryption nor cryptographic server
+identity. A loopback forwarder can lead to a remote database; this cannot be
+inferred from the URL. Such deployments must use verified TLS, with the server
+certificate matching the configured host, rather than relying on this exception.
+
+Remote connections require `DATABASE_URL=postgresql://.../database?sslmode=verify-full`.
+Node verifies both certificate chain and hostname, with TLS 1.2 minimum. For a
+private CA, inject PEM contents through optional `DATABASE_TLS_CA` (1–65,536
+characters); otherwise Node's trust store applies. A CA requires verify-full even
+for loopback. Invalid certificates, wrong hostnames, and servers without TLS
+fail closed; there is no downgrade. Keep CA/configuration integrity protected.
+
+Plaintext is allowed only for explicit `127.0.0.1`, `::1`, or `localhost`; plaintext
+localhost is pinned to IPv4 loopback. Containers/private-network hostnames and
+private IPs are remote and require TLS. Only absent/`disable` (loopback) or
+`verify-full` SSL modes are supported. Username, password, and database are explicit.
+The only accepted URL query keys are `sslmode` and `application_name`, each once.
+URL endpoint/session-role/SSL overrides and ambiguous modes such as `require`,
+`prefer`, `verify-ca`, and `no-verify` are rejected. Explicit pg connection fields
+prevent ambient PG* variables from replacing credentials, endpoint, TLS, or
+session options. `search_path=public` keeps PostgreSQL's implicit catalog-first
+lookup and excludes user schemas; TEMPORARY and schema CREATE privileges are denied.
+
+These are startup checks, not continuous grant monitoring or independent proof
+that the database administrator is trustworthy. Administrators can change schema
+or grants after readiness. A later revoked write grant still causes the existing
+safe application error and atomic rollback. There is no RLS: stolen runtime
+credentials can read all granted tenants and append directly to notes/audits.
+Protect the local account, launcher, runtime credentials, database administrators,
+and migration artifacts. Backup/restore drills, release packaging, and an approved
+production authentication profile remain separate requirements.
 
 ## Real PostgreSQL integration tests
 

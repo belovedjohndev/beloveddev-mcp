@@ -5,7 +5,7 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 8-C
+## Current status: Milestone 8-D
 
 The stdio MCP server exposes eight tools backed by tenant-scoped
 PostgreSQL repositories. The tools `get_profile`, `list_projects`, `get_project`,
@@ -46,7 +46,13 @@ Run commands from the repository root.
 3. Start PostgreSQL: `npm run db:up`.
 4. Apply the migration chain: `npm run db:migrate`.
 5. Check everything, including real PostgreSQL tests: `npm run verify:all`.
-6. Launch the compiled server directly with Node using the instructions below:
+6. Provision the restricted role using the [runtime SQL](docs/database.md#migrations).
+   Keep the example administrator configuration in a separate protected file for
+   migrations/tests; replace `.env` with a minimal runtime configuration containing
+   the restricted `DATABASE_URL`, MCP settings, and log settings. Do not inject
+   `POSTGRES_PASSWORD` or `TEST_DATABASE_URL` into the server process. The example
+   Compose superuser is now rejected by the server's startup gate.
+7. Launch the compiled server directly with Node using the instructions below:
    `node --env-file=.env apps/mcp-server/dist/main.js`.
 
 If port 5432 is already occupied, choose a free port in `POSTGRES_PORT` and
@@ -54,13 +60,24 @@ update `DATABASE_URL` and `TEST_DATABASE_URL` to match before starting Compose.
 The [database guide](docs/database.md) includes a PowerShell workflow that asks
 Docker for an available host port.
 
-A valid configuration starts the MCP stdio transport and writes structured logs
+A valid configuration and successful database readiness check start application
+request handling and write structured logs
 to stderr. Stdout is reserved exclusively for JSON-RPC protocol traffic. Invalid
 application configuration produces a safe JSON error on stderr and exits with code 1.
 If the explicitly selected env file is missing, Node fails before application
 startup and writes its diagnostic to stderr without exposing environment contents.
 `LOG_LEVEL=silent` suppresses successful startup and invocation logs;
 configuration errors still log.
+
+Before declaring `mcp.ready`, the server verifies PostgreSQL 18 connectivity,
+the configured database and connected role identities,
+the committed migration ledger and schema signature, and effective least-privilege
+grants under one 10-second deadline. Dangerous roles, schema drift, missing grants,
+and unreachable databases fail safely and trigger M8-C cleanup. There are no
+startup migrations, grants, or retries. Remote database URLs require
+`sslmode=verify-full`; optional `DATABASE_TLS_CA` supplies private-CA PEM contents.
+Plaintext is limited to explicit loopback hosts. See the
+[database security policy](docs/database.md#m8-d-connection-and-readiness-policy).
 
 ## Direct Node MCP launcher
 
@@ -280,9 +297,12 @@ Changing initialization credentials does not update an existing database volume.
 `npm run db:down` preserves data; deleting the volume destroys it.
 
 Use separate administrator/migration credentials and runtime credentials. The
-runtime role needs only the documented SELECT grants and INSERT on `project_notes`
-and `audit_logs`; it should not own tables or receive migration, UPDATE, or DELETE
-privileges. Tenant isolation relies on application authorization and scoped SQL.
+runtime role needs only the documented SELECT grants (including the migration
+ledger), column reads on tenant/user identity, and INSERT on `project_notes`
+and `audit_logs`. Startup rejects ownership, dangerous role attributes or
+membership paths, excess grants, and missing grants; administrators must also
+revoke PUBLIC schema CREATE and database TEMPORARY. Tenant isolation relies on
+application authorization and scoped SQL.
 There are no RLS policies protecting runtime database credentials: compromised
 credentials can access granted tables across tenants. Protect the env file,
 credential injection, and local account accordingly.
@@ -323,10 +343,11 @@ constraints, cleanup behavior, and Drizzle compatibility notes.
 
 All eight planned V1 tools are implemented through Milestone 7-B. M8-B adds the
 documented local trust boundary and protocol-safe launcher; M8-C bounds lifecycle
-cleanup and documents uncertain outcomes after disconnect. Further Milestone 8
+cleanup and documents uncertain outcomes after disconnect. M8-D adds database
+transport policy and bounded schema/privilege readiness. Further Milestone 8
 hardening remains unfinished; this slice is not a production-readiness claim.
 Known blockers include an approved production authentication profile, broader
-operational readiness and failure testing, resource/input-limit review,
+operational failure testing, resource/input-limit review,
 release packaging, and a tested backup/recovery and migration deployment process.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),

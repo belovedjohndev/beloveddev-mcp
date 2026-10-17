@@ -1,6 +1,8 @@
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool, type PoolClient } from 'pg';
 import * as schema from './schema.js';
+import { databaseConnectionConfig } from './connection-policy.js';
+export { DatabasePolicyError } from './connection-policy.js';
 
 export type Database = NodePgDatabase<typeof schema>;
 export type RepositoryDatabase = Pick<Database, 'select' | 'insert'>;
@@ -11,10 +13,11 @@ export function openDatabase(
     onIdleError: () => void;
     onClientError?: () => void;
     maxConnections?: number;
+    tlsCa?: string;
   },
 ) {
   const pool = new Pool({
-    connectionString,
+    ...databaseConnectionConfig(connectionString, options.tlsCa),
     max: options.maxConnections ?? 10,
     connectionTimeoutMillis: 5_000,
     idleTimeoutMillis: 10_000,

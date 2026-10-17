@@ -39,6 +39,7 @@ const entrypoint = fileURLToPath(new URL('../../../apps/mcp-server/dist/main.js'
 const secret = 'private-stdio-test-signing-key-at-least-32-bytes';
 const logSchema = z.object({
   event: z.string(),
+  category: z.string().optional(),
   requestId: z.uuid().optional(),
   toolName: z.string().optional(),
   actorUserId: z.uuid().nullable().optional(),
@@ -197,7 +198,7 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
     }
   >;
   beforeAll(async () => {
-    database = await createTestDatabase(parseTestDatabaseUrl(process.env));
+    database = await createTestDatabase(parseTestDatabaseUrl(process.env), { mcpRuntime: true });
     const role = new URL(database.runtimeUrl).username;
     if (!/^beloveddev_test_[0-9a-f]{32}_runtime$/.test(role))
       throw new Error('Unexpected test role');
@@ -298,7 +299,7 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
   }
 
   it.each(['a', 'b'] as const)(
-    'SDK client reads all seven tools as tenant %s through SELECT-only credentials',
+    'SDK client reads all seven read tools as tenant %s through restricted runtime credentials',
     async (tenant) => {
       const identity = tenants[tenant];
       // Tenant A is an owner; exercise tenant B with the member role here.
@@ -565,6 +566,59 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
           .filter((record) => record.resultStatus === 'error')
           .every((record) => record.errorCategory === 'NOT_FOUND'),
       ).toBe(true);
+    },
+  );
+
+  it.each([
+    'administrator',
+    'missing_grant',
+    'schema_drift',
+    'unavailable',
+    'wrong_credentials',
+    'insecure_remote',
+  ] as const)(
+    'rejects %s database configuration before MCP application execution',
+    async (failure) => {
+      const role = new URL(database.runtimeUrl).username;
+      const url = new URL(
+        failure === 'administrator' ? parseTestDatabaseUrl(process.env) : database.runtimeUrl,
+      );
+      if (failure === 'administrator') url.pathname = new URL(database.runtimeUrl).pathname;
+      if (failure === 'unavailable') url.port = '1';
+      if (failure === 'wrong_credentials') url.password = `private-incorrect-${randomUUID()}`;
+      if (failure === 'insecure_remote') url.hostname = 'db.invalid';
+      if (failure === 'missing_grant')
+        await database.admin.pool.query(`REVOKE INSERT ON audit_logs FROM "${role}"`);
+      if (failure === 'schema_drift')
+        await database.admin.pool.query('ALTER TABLE projects ALTER COLUMN name DROP NOT NULL');
+      const server = rawServer({ ...environment(tenants.a), DATABASE_URL: url.href });
+      try {
+        // Queue work before readiness; the SDK factory must not admit it.
+        const response = server
+          .request('tools/call', { name: 'get_profile', arguments: {} })
+          .catch(() => undefined);
+        expect(await server.waitForExit()).toBe(1);
+        await response;
+        const records = logs(server.stderr);
+        expect(records.some((record) => record.event === 'mcp.ready')).toBe(false);
+        expect(records.some((record) => record.event === 'mcp.invocation')).toBe(false);
+        expect(records.some((record) => record.event === 'mcp.startup_failed')).toBe(true);
+        if (failure === 'wrong_credentials' || failure === 'unavailable') {
+          expect(records).toContainEqual(
+            expect.objectContaining({ event: 'mcp.startup_failed', category: 'CONNECTION' }),
+          );
+        }
+        expect(server.failures).toEqual([]);
+        expect(server.stderr).not.toContain(url.password);
+        expect(server.stderr).not.toContain(url.href);
+        expect(server.stderr).not.toContain('stack');
+      } finally {
+        await server.close();
+        if (failure === 'missing_grant')
+          await database.admin.pool.query(`GRANT INSERT ON audit_logs TO "${role}"`);
+        if (failure === 'schema_drift')
+          await database.admin.pool.query('ALTER TABLE projects ALTER COLUMN name SET NOT NULL');
+      }
     },
   );
 
@@ -902,7 +956,7 @@ describe('compiled project-note MCP mutation with PostgreSQL', () => {
 
   beforeAll(async () => {
     database = await createTestDatabase(parseTestDatabaseUrl(process.env), {
-      projectNoteWrites: true,
+      mcpRuntime: true,
     });
     role = new URL(database.runtimeUrl).username;
     if (!/^beloveddev_test_[0-9a-f]{32}_runtime$/.test(role))
@@ -1193,9 +1247,11 @@ describe('compiled project-note MCP mutation with PostgreSQL', () => {
   it.each(['missing', 'viewer'] as const)(
     'denies %s context before protected repository work',
     async (kind) => {
+      const session = await connect(kind === 'viewer' ? tenants.b : undefined);
+      // Readiness requires the complete grants. Revoke after it succeeds to
+      // prove authorization still short-circuits protected work at invocation.
       await database.admin.pool.query(`REVOKE SELECT ON projects, project_notes FROM "${role}"`);
       try {
-        const session = await connect(kind === 'viewer' ? tenants.b : undefined);
         const payload = safeError(await create(session, command(tenants.b.projectId)));
         const code = kind === 'viewer' ? 'FORBIDDEN' : 'UNAUTHENTICATED';
         expect(payload.code).toBe(code);

@@ -11,9 +11,31 @@ const cursorSecret = 'private-cursor-secret-for-tests-only-123456789';
 
 function runServer(
   overrides: Record<string, string | undefined> = {},
-  launch: { args?: string[]; cwd?: string } = {},
+  launch: {
+    args?: string[];
+    cwd?: string;
+    readiness?: 'ready' | 'pending' | 'failed';
+    signalWhileProbing?: 'SIGINT' | 'SIGTERM';
+  } = {},
 ) {
-  return spawnSync(process.execPath, launch.args ?? [entrypoint], {
+  // Bootstrap unit tests isolate the read-only readiness probe. Real PostgreSQL
+  // and exact unmodified launchers are covered by the stdio integration suite.
+  const replacement = `data:text/javascript,${encodeURIComponent(`
+    export { DatabaseReadinessError } from ${JSON.stringify(new URL('../../../packages/database/dist/readiness.js', import.meta.url).href)};
+    export function assertRuntimeDatabaseReady() {
+      ${launch.signalWhileProbing === undefined ? '' : `queueMicrotask(() => process.emit('${launch.signalWhileProbing}'));`}
+      ${launch.readiness === 'pending' ? 'return new Promise(() => {});' : launch.readiness === 'failed' ? "return Promise.reject(new Error('private-database-failure'));" : 'return Promise.resolve();'}
+    }
+  `)}`;
+  const preload = `data:text/javascript,${encodeURIComponent(`
+    import { registerHooks } from 'node:module';
+    registerHooks({ resolve(specifier, context, nextResolve) {
+      return specifier === '@beloveddev/database/readiness'
+        ? { url: ${JSON.stringify(replacement)}, shortCircuit: true }
+        : nextResolve(specifier, context);
+    } });
+  `)}`;
+  return spawnSync(process.execPath, [`--import=${preload}`, ...(launch.args ?? [entrypoint])], {
     cwd: launch.cwd ?? root,
     env: {
       ...process.env,
@@ -34,6 +56,34 @@ function runServer(
 }
 
 describe('stdio composition root', () => {
+  it.each(['SIGINT', 'SIGTERM'] as const)('handles %s while readiness is pending', (signal) => {
+    const result = runServer({}, { readiness: 'pending', signalWhileProbing: signal });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain(`"reason":"${signal}"`);
+    expect(result.stderr).not.toContain('mcp.ready');
+    expect(result.stderr).not.toContain('mcp.startup_failed');
+  });
+  it('does not declare readiness and exits safely when the startup probe fails', () => {
+    const result = runServer({}, { readiness: 'failed' });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('mcp.startup_failed');
+    expect(result.stderr).not.toContain('mcp.ready');
+    expect(result.stderr).not.toContain('private-');
+  });
+
+  it('handles stdin EOF while readiness is pending without claiming readiness', () => {
+    const result = runServer({}, { readiness: 'pending' });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('transport_closed');
+    expect(result.stderr).not.toContain('mcp.ready');
+    expect(result.stderr).not.toContain('mcp.startup_failed');
+  });
   it('closes a partially started wire and database when serveStdio fails before returning a handle', () => {
     const moduleUrl = (relative: string) => new URL(relative, import.meta.url).href;
     const dataModule = (source: string) => `data:text/javascript,${encodeURIComponent(source)}`;

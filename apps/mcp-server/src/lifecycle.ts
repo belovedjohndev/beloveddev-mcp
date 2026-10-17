@@ -28,6 +28,10 @@ export class StdioLifecycle {
 
   constructor(private readonly options: LifecycleOptions) {}
 
+  get isStopping(): boolean {
+    return this.stopping;
+  }
+
   databaseError(source: 'idle' | 'client'): Promise<void> {
     if (!this.finished) {
       this.log(

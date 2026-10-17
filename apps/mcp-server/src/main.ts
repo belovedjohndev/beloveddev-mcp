@@ -8,7 +8,12 @@ import {
   parseMcpEnvironment,
 } from '@beloveddev/infrastructure/environment';
 import { createLogger } from '@beloveddev/infrastructure/logger';
-import { openDatabase, type DatabaseConnection } from '@beloveddev/database/client';
+import {
+  openDatabase,
+  DatabasePolicyError,
+  type DatabaseConnection,
+} from '@beloveddev/database/client';
+import { assertRuntimeDatabaseReady, DatabaseReadinessError } from '@beloveddev/database/readiness';
 import { PermissionAuthorization } from '@beloveddev/application/request-context';
 import { GetProfile } from '@beloveddev/application/use-cases/get-profile';
 import { ListProjects } from '@beloveddev/application/use-cases/list-projects';
@@ -80,6 +85,7 @@ try {
   process.on('SIGINT', onSigint);
   process.on('SIGTERM', onSigterm);
   database = openDatabase(environment.DATABASE_URL, {
+    ...(environment.DATABASE_TLS_CA === undefined ? {} : { tlsCa: environment.DATABASE_TLS_CA }),
     onClientError: () => {
       void lifecycle?.databaseError('client');
     },
@@ -87,6 +93,9 @@ try {
       void lifecycle?.databaseError('idle');
     },
   });
+  const readiness = assertRuntimeDatabaseReady(database.pool);
+  // Observe immediately, including a constructor failure before serveStdio attaches its factory.
+  void readiness.catch(() => {});
   const memberships = new PostgresMembershipRepository(database.db);
   const projects = new PostgresProjectRepository(database.db);
   const clients = new PostgresClientRepository(database.db);
@@ -121,10 +130,17 @@ try {
   };
   transport = new StdioServerTransport();
   const invocations = lifecycle;
-  handle = serveStdio(() => createMcpServer({ useCases, context, logger, invocations }), {
-    transport,
-    onerror: () => logger.error({ event: 'mcp.protocol_error' }, 'MCP protocol operation failed'),
-  });
+  handle = serveStdio(
+    async () => {
+      await readiness;
+      if (invocations.isStopping) throw new Error('MCP server is stopping.');
+      return createMcpServer({ useCases, context, logger, invocations });
+    },
+    {
+      transport,
+      onerror: () => logger.error({ event: 'mcp.protocol_error' }, 'MCP protocol operation failed'),
+    },
+  );
   // Discovery probes may be discarded; the shared pool follows the wire lifetime.
   const onTransportClose = transport.onclose;
   transport.onclose = () => {
@@ -132,31 +148,42 @@ try {
     void lifecycle?.stop('transport_closed');
     onTransportClose?.();
   };
-  logger.info(
-    {
-      event: 'mcp.ready',
-      environment: environment.NODE_ENV,
-      transport: 'stdio',
-      authMode: 'local',
-    },
-    'MCP server listening',
-  );
-} catch (error: unknown) {
-  const logger = createLogger('error');
-  try {
-    logger.error(
+  await readiness;
+  if (!lifecycle.isStopping) {
+    logger.info(
       {
-        event:
-          error instanceof EnvironmentValidationError
-            ? 'configuration.invalid'
-            : 'mcp.startup_failed',
-        invalidVariables: error instanceof EnvironmentValidationError ? error.fields : [],
+        event: 'mcp.ready',
+        environment: environment.NODE_ENV,
+        transport: 'stdio',
+        authMode: 'local',
       },
-      'Unable to initialize MCP server',
+      'MCP server listening',
     );
-  } catch {
-    // A broken stderr sink must not skip cleanup or fall back to protocol stdout.
   }
-  if (lifecycle !== undefined) await lifecycle.stop('startup_error');
-  else process.exitCode = 1;
+} catch (error: unknown) {
+  // EOF or a signal during startup uses the same shutdown, without upgrading a
+  // normal closure to startup failure when the pool is being closed underneath it.
+  if (lifecycle?.isStopping) {
+    await lifecycle.stop('transport_closed');
+  } else {
+    const logger = createLogger('error');
+    try {
+      logger.error(
+        {
+          event:
+            error instanceof EnvironmentValidationError
+              ? 'configuration.invalid'
+              : 'mcp.startup_failed',
+          invalidVariables: error instanceof EnvironmentValidationError ? error.fields : [],
+          ...(error instanceof DatabaseReadinessError ? { category: error.category } : {}),
+          ...(error instanceof DatabasePolicyError ? { category: 'TRANSPORT_POLICY' } : {}),
+        },
+        'Unable to initialize MCP server',
+      );
+    } catch {
+      // A broken stderr sink must not skip cleanup or fall back to protocol stdout.
+    }
+    if (lifecycle !== undefined) await lifecycle.stop('startup_error');
+    else process.exitCode = 1;
+  }
 }

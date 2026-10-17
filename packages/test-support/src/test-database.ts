@@ -7,6 +7,8 @@ export async function createTestDatabase(
   options: {
     beforeMigrate?: (connection: DatabaseConnection) => Promise<void>;
     projectNoteWrites?: boolean;
+    mcpRuntime?: boolean;
+    tlsCa?: string;
   } = {},
 ) {
   const suffix = randomUUID().replaceAll('-', '');
@@ -18,7 +20,11 @@ export async function createTestDatabase(
   const onIdleError = () => {
     if (!closing) idleFailure = true;
   };
-  const control = openDatabase(administratorUrl, { onIdleError, maxConnections: 1 });
+  const connectionOptions = {
+    onIdleError,
+    ...(options.tlsCa === undefined ? {} : { tlsCa: options.tlsCa }),
+  };
+  const control = openDatabase(administratorUrl, { ...connectionOptions, maxConnections: 1 });
   let admin: DatabaseConnection | undefined;
   let runtime: DatabaseConnection | undefined;
   let databaseCreated = false;
@@ -51,7 +57,7 @@ export async function createTestDatabase(
     roleCreated = true;
     const url = new URL(administratorUrl);
     url.pathname = `/${databaseName}`;
-    admin = openDatabase(url.href, { onIdleError });
+    admin = openDatabase(url.href, connectionOptions);
     const identity = await admin.pool.query<{ name: string }>('SELECT current_database() AS name');
     if (identity.rows[0]?.name !== databaseName) {
       throw new Error('Refusing to migrate an unexpected test database.');
@@ -64,15 +70,20 @@ export async function createTestDatabase(
       `GRANT SELECT ON tenant_memberships, developer_profiles, clients, projects, project_evidence, project_blockers, project_notes, opportunities TO "${roleName}"`,
     );
     await admin.pool.query(`GRANT SELECT (id, status) ON tenants, users TO "${roleName}"`);
-    await admin.pool.query(`GRANT INSERT ON projects TO "${roleName}"`);
-    if (options.projectNoteWrites) {
+    if (!options.mcpRuntime) await admin.pool.query(`GRANT INSERT ON projects TO "${roleName}"`);
+    if (options.projectNoteWrites || options.mcpRuntime) {
       await admin.pool.query(`GRANT INSERT ON project_notes, audit_logs TO "${roleName}"`);
+    }
+    if (options.mcpRuntime) {
+      await admin.pool.query(`REVOKE TEMPORARY ON DATABASE "${databaseName}" FROM PUBLIC`);
+      await admin.pool.query(`GRANT USAGE ON SCHEMA drizzle TO "${roleName}"`);
+      await admin.pool.query(`GRANT SELECT ON drizzle.__drizzle_migrations TO "${roleName}"`);
     }
     url.username = roleName;
     url.password = password;
     url.searchParams.delete('user');
     url.searchParams.delete('password');
-    runtime = openDatabase(url.href, { onIdleError });
+    runtime = openDatabase(url.href, connectionOptions);
     return { admin, runtime, runtimeUrl: url.href, close };
   } catch (error: unknown) {
     await close();

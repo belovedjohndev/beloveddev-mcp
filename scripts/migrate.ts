@@ -10,6 +10,7 @@ const logger = createLogger('info');
 try {
   const environment = parseEnvironment(process.env);
   const connection = openDatabase(environment.DATABASE_URL, {
+    ...(environment.DATABASE_TLS_CA === undefined ? {} : { tlsCa: environment.DATABASE_TLS_CA }),
     onIdleError: () => logger.error({ event: 'database.idle_error' }, 'Database connection failed'),
   });
   try {

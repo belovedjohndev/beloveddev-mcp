@@ -9,6 +9,16 @@ import {
 const databaseUrl = 'postgresql://user:private-password@localhost:5432/beloveddev';
 
 describe('environment validation', () => {
+  it('accepts a bounded optional private CA configuration without putting it in errors', () => {
+    expect(
+      parseEnvironment({ DATABASE_URL: databaseUrl, DATABASE_TLS_CA: 'private-ca' }),
+    ).toHaveProperty('DATABASE_TLS_CA', 'private-ca');
+    for (const ca of ['', 'x'.repeat(65_537)]) {
+      expect(() => parseEnvironment({ DATABASE_URL: databaseUrl, DATABASE_TLS_CA: ca })).toThrow(
+        'Invalid environment variables: DATABASE_TLS_CA',
+      );
+    }
+  });
   it('applies defaults, freezes configuration, and discards unrelated environment variables', () => {
     const input = { DATABASE_URL: databaseUrl, UNRELATED_SECRET: 'private-value' };
     const result = parseEnvironment(input);
