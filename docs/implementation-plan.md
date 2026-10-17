@@ -695,6 +695,39 @@ automation, or unrelated operational feature is included. Startup checks cannot
 prevent a trusted administrator from changing grants/schema after readiness or
 protect stolen runtime credentials across tenants.
 
+### Milestone 8-E — Invocation admission and response bounds (implemented)
+
+The process shares one eight-slot admission gate across all eight tools and SDK
+server factories. There is no queue. Saturation returns existing `RATE_LIMITED`
+before context lookup or application execution. Shutdown refusal retains the
+M8-C boundary; M8-D database readiness still gates all application admission.
+
+A 30-second application response deadline includes context, execution, success
+validation, and serialization. Expiry returns safe `INTERNAL_ERROR` but does not
+cancel or retry application/database work. Capacity and shutdown leases remain
+occupied until the underlying execution settles. Late context resolution cannot
+start a new use case, and late execution rejection remains observed. The single
+invocation log reports the response outcome, without later success relabeling.
+
+The UTF-8 JSON representation of a successful `CallToolResult` must be at most
+1,048,576 bytes, including both content representations and escaping, excluding
+SDK JSON-RPC framing. Oversized results return safe `INTERNAL_ERROR`, without
+truncation, altered schemas, or leaked output. A timed-out/oversized mutation
+response may follow or precede commit: explicit retries preserve the exact
+payload and original idempotency key. No automatic mutation retry is added.
+
+Fake-timer SDK tests cover shared capacity, immediate rejection/no queue, exact
+deadlines, late success/failure, context expiry, cleanup, elapsed-time checks, and
+exact/over-limit UTF-8 serialization. Real PostgreSQL tests hold eight note writes
+at audit insertion, expire their responses, verify retained capacity/shutdown
+accounting, then recover committed work without duplicate audit. Direct stdio
+tests verify process admission and safe oversized responses with protocol-only
+stdout. Existing authorization, tenant isolation, readiness, and lifecycle suites
+remain. SDK input framing, synchronous event-loop blocking, PostgreSQL server
+resource consumption, and response delivery to disconnected clients are not fully
+bounded by this policy. Explicit mutation recovery also requires the same trusted
+tenant and author. M8 as a whole is not declared production-ready.
+
 ---
 
 ## 11. Milestone 9 — Portfolio Documentation

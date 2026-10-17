@@ -1,10 +1,41 @@
 # BelovedDev MCP V1 — Architecture
 
-## Implemented architecture through Milestone 8-D
+## Implemented architecture through Milestone 8-E
 
 The stdio executable composes trusted local request context, application use
 cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
 logging. Database setup remains an explicit migration CLI action.
+
+M8-E adds a process-owned `InvocationAdmission` in `packages/mcp/src/invocation-policy.ts`.
+It is shared across SDK discovery/legacy server factories and composes with the
+existing lifecycle admission lease. All eight explicit registrations still use
+the same invocation boundary; schemas, use cases, authorization, and transactions
+are unchanged. Fixed V1 limits are eight executing invocations, a 30-second
+application response deadline, and 1,048,576 serialized success-response bytes.
+There is no queue: saturation returns `RATE_LIMITED` before context resolution.
+
+The deadline spans trusted-context lookup, use-case execution, output validation,
+and serialization. Expiry returns the existing safe `INTERNAL_ERROR` envelope.
+Execution remains observed and retains both capacity and lifecycle accounting
+until it actually settles, including late rejection. A late context lookup does
+not initiate a use case after expiry. Successful responses are schema-validated,
+then measured as UTF-8 JSON for the entire `CallToolResult` (both `content` and
+`structuredContent`, including escaping; SDK JSON-RPC framing excluded). The
+boundary rejects oversize rather than truncating or weakening the output schema.
+
+Invocation logs are emitted once at the response decision, including timeout
+errors. Late completion cannot turn that response log into success or emit a
+second invocation log. Physical work may continue after the response log; its
+lease remains visible to shutdown accounting. Neither a timeout nor oversized
+success output proves rollback of an audited write. Explicit retries reuse the
+same exact payload/key; no automatic retry or cancellation is introduced.
+Timers need the Node event loop. Elapsed-time checks also reject overdue success
+when a synchronous phase prevented the timer callback from running. These limits
+are not hard CPU/memory isolation or transport request/input-size limits.
+SDK input framing and PostgreSQL server resource consumption remain outside
+these bounds. A completed response decision does not guarantee delivery to a
+disconnected client. Uncertain mutation recovery requires the same trusted tenant
+and author, identical payload, and original idempotency key.
 
 M8-D gates the SDK server factory and `mcp.ready` on a read-only database probe.
 One 10-second total budget covers connection acquisition, configured database/role
@@ -795,8 +826,9 @@ Normal SDK closure is observed to avoid unnecessary duplicate wire cleanup.
 
 On the first trigger, stdin is paused and the shared MCP invocation boundary
 refuses new admission before context resolution or protected repository work.
-Admitted callbacks are counted until execution, output validation, and invocation
-logging finish; release is guaranteed on success and application errors. Shutdown
+Admitted work is counted until execution/output validation and response logging
+have both finished. An expired response does not release still-running work;
+release is guaranteed on eventual success or failure. Shutdown
 does not inject cancellation into use cases or retry them. SDK schema/protocol
 failures remain outside this application tracking boundary.
 

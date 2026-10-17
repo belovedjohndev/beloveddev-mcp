@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { Client, type CallToolResult } from '@modelcontextprotocol/client';
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/client/stdio';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseTestDatabaseUrl } from '@beloveddev/infrastructure/environment';
 import { auditLogs, projectEvidence, projectNotes, projects } from '@beloveddev/database/schema';
 import { createTestDatabase, type TestDatabase } from '@beloveddev/test-support/test-database';
@@ -1123,6 +1123,96 @@ describe('compiled project-note MCP mutation with PostgreSQL', () => {
       audits: await database.admin.db.select().from(auditLogs),
     };
   }
+
+  it('enforces the process capacity on the direct stdio launcher without queuing or duplicating writes', async () => {
+    const applicationName = `m8e-capacity-${randomUUID()}`;
+    const server = await startRaw(applicationName);
+    const blocker = await database.admin.pool.connect();
+    let pending: Promise<PromiseSettledResult<Response>[]> | undefined;
+    const outcomes: PromiseSettledResult<Response>[] = [];
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query('LOCK TABLE audit_logs IN SHARE MODE');
+      pending = Promise.allSettled(
+        Array.from({ length: 8 }, (_, index) =>
+          server.request('tools/call', {
+            name: 'create_project_note',
+            arguments: { ...command(), idempotencyKey: `stdio-note-key-capacity-${index}` },
+          }),
+        ),
+      );
+      await vi.waitFor(
+        async () => {
+          const waiting = await database.admin.pool.query<{ count: number }>(
+            "SELECT count(*)::int AS count FROM pg_stat_activity WHERE datname=current_database() AND application_name=$1 AND wait_event_type='Lock'",
+            [applicationName],
+          );
+          expect(waiting.rows[0]?.count).toBe(8);
+        },
+        { timeout: 5000 },
+      );
+      const response = await server.request('tools/call', { name: 'get_profile', arguments: {} });
+      const denied = z
+        .object({
+          isError: z.literal(true),
+          content: z.array(z.object({ type: z.literal('text'), text: z.string() })),
+        })
+        .parse(response.result);
+      expect(response.result).not.toHaveProperty('structuredContent');
+      expect(safeError(denied).code).toBe('RATE_LIMITED');
+    } finally {
+      try {
+        await blocker.query('ROLLBACK');
+      } finally {
+        blocker.release(true);
+      }
+      try {
+        if (pending !== undefined) outcomes.push(...(await pending));
+      } finally {
+        await server.close();
+      }
+    }
+    expect(outcomes).toHaveLength(8);
+    for (const entry of outcomes) {
+      if (entry.status !== 'fulfilled') throw entry.reason;
+      expect(entry.value.error).toBeUndefined();
+      const result = z
+        .object({ structuredContent: toolSchemas.create_project_note.output })
+        .parse(entry.value.result);
+      expect(result.structuredContent.created).toBe(true);
+    }
+    const saved = await records();
+    expect(saved.notes).toHaveLength(8);
+    expect(saved.audits).toHaveLength(8);
+    const invocations = logs(server.stderr).filter((record) => record.event === 'mcp.invocation');
+    expect(invocations).toHaveLength(9);
+    expect(invocations.filter((record) => record.errorCategory === 'RATE_LIMITED')).toHaveLength(1);
+    expectSafeLifecycle(server);
+  });
+
+  it('keeps oversized-success rejection safe and protocol-only through the direct stdio launcher', async () => {
+    await database.admin.pool.query('UPDATE developer_profiles SET summary=$1 WHERE tenant_id=$2', [
+      '🚀'.repeat(150_000),
+      tenants.a.tenantId,
+    ]);
+    const server = await startRaw(`m8e-size-${randomUUID()}`);
+    try {
+      const response = await server.request('tools/call', { name: 'get_profile', arguments: {} });
+      const denied = z
+        .object({
+          isError: z.literal(true),
+          content: z.array(z.object({ type: z.literal('text'), text: z.string() })),
+        })
+        .parse(response.result);
+      expect(response.result).not.toHaveProperty('structuredContent');
+      expect(safeError(denied).code).toBe('INTERNAL_ERROR');
+      expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThan(1000);
+      expect(server.stderr).not.toContain('🚀');
+    } finally {
+      expect(await server.close()).toBe(0);
+    }
+    expectSafeLifecycle(server);
+  });
 
   it.each(['a', 'b'] as const)(
     'creates and retries as tenant %s with trusted identity and a single durable audit',

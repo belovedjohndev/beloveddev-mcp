@@ -35,6 +35,7 @@ import { PostgresNoteRepository } from '@beloveddev/infrastructure/postgres/note
 import { PostgresProjectNoteCreationRepository } from '@beloveddev/infrastructure/postgres/project-note-creation-repository';
 import { PostgresOpportunityRepository } from '@beloveddev/infrastructure/postgres/opportunity-repository';
 import { createMcpServer } from '@beloveddev/mcp/server';
+import { InvocationAdmission } from '@beloveddev/mcp/invocation-policy';
 import { StdioLifecycle } from './lifecycle.js';
 
 let database: DatabaseConnection | undefined;
@@ -130,11 +131,13 @@ try {
   };
   transport = new StdioServerTransport();
   const invocations = lifecycle;
+  // Discovery/legacy factories share one capacity budget and lifecycle accounting.
+  const admission = new InvocationAdmission(invocations);
   handle = serveStdio(
     async () => {
       await readiness;
       if (invocations.isStopping) throw new Error('MCP server is stopping.');
-      return createMcpServer({ useCases, context, logger, invocations });
+      return createMcpServer({ useCases, context, logger, admission });
     },
     {
       transport,

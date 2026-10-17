@@ -915,7 +915,7 @@ Prefer additive evolution where practical.
 
 ## MCP SDK and application error boundary
 
-The five implemented read tools use the official MCP SDK v2
+All eight implemented tools use the official MCP SDK v2
 `McpServer.registerTool()` API with strict Zod input and success-output schemas.
 
 Invalid protocol requests, unknown tools, and invalid tool argument schemas are
@@ -939,3 +939,35 @@ the user query, project/evidence-type/skill filters, page limit, and opaque curs
 Tenant identity, PostgreSQL query controls, relevance positions, fingerprint, and
 search vector remain internal. Its success schema mirrors the application result;
 the tool is read-only and requires `projects:read`.
+
+## Application invocation resource policy (M8-E)
+
+All eight tools share eight executing application slots per stdio process, with
+no waiting queue. Capacity is checked before trusted-context resolution or use
+case execution. Saturation returns the existing safe `RATE_LIMITED` application
+envelope with a new request ID, `isError=true`, and no `structuredContent`.
+SDK protocol/input-schema failures remain outside this application boundary.
+
+An admitted callback has a 30-second application response deadline, including
+context resolution, use-case work, output validation, and serialization. Expiry
+returns existing safe `INTERNAL_ERROR`. It does not cancel work or free its slot:
+the admission/lifecycle lease stays occupied until execution actually settles.
+Late context resolution cannot initiate a new use case. Late execution results
+or rejections are observed but cannot replace the response or generate a second
+invocation log. The invocation log records the response outcome, not delivery
+or proof that underlying work has finished.
+
+Success responses must fit 1 MiB (1,048,576 UTF-8 bytes) when the full MCP
+`CallToolResult` is JSON-serialized. This includes both text `content` and
+`structuredContent`, their property names, JSON escaping, and `meta.requestId`;
+SDK-owned JSON-RPC framing is excluded. Oversize returns safe `INTERNAL_ERROR`
+without truncation or partial structured output. Equality with the limit is
+accepted. Input/output schemas, permissions, and annotations are unchanged.
+
+For `create_project_note`, timeout or oversized/invalid success output never
+proves rollback. An admitted note/audit transaction may commit after the error
+response. Explicit recovery uses the exact original payload and idempotency key;
+capacity may still be occupied and return `RATE_LIMITED` until execution settles.
+No automatic mutation retries, new error categories, or transport changes are
+introduced. Node timers require an available event loop; elapsed-time checks
+reject overdue success even if synchronous work delayed the timer callback.

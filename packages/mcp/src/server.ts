@@ -18,6 +18,11 @@ import type { ListOpportunities } from '@beloveddev/application/use-cases/list-o
 import type { EvaluateOpportunity } from '@beloveddev/application/use-cases/evaluate-opportunity';
 import type { CreateProjectNote } from '@beloveddev/application/use-cases/create-project-note';
 import { safeErrorSchema, toolSchemas, type ToolName } from './schemas.js';
+import {
+  APPLICATION_RESPONSE_DEADLINE_MS,
+  InvocationAdmission,
+  MAX_SUCCESS_RESPONSE_BYTES,
+} from './invocation-policy.js';
 
 export interface McpUseCases {
   readonly getProfile: Pick<GetProfile, 'execute'>;
@@ -48,8 +53,10 @@ export function createMcpServer(dependencies: {
   context: RequestContextProvider;
   logger: InvocationLogger;
   invocations?: { enter(): (() => void) | null };
+  admission?: InvocationAdmission;
 }): McpServer {
   const server = new McpServer({ name: 'beloveddev-mcp', version: '0.0.0' });
+  const admission = dependencies.admission ?? new InvocationAdmission(dependencies.invocations);
   const annotations = {
     readOnlyHint: true,
     destructiveHint: false,
@@ -63,29 +70,65 @@ export function createMcpServer(dependencies: {
   ): Promise<CallToolResult> {
     const requestId = randomUUID();
     const started = performance.now();
-    let context: RequestContext | null = null;
+    const state: { context: RequestContext | null } = { context: null };
     let errorCategory: ApplicationErrorCode | undefined;
     let release: (() => void) | undefined;
-    try {
-      const admission = dependencies.invocations?.enter();
-      if (admission === null) throw new ApplicationError('INTERNAL_ERROR');
-      release = admission;
-      context = await dependencies.context.resolve(requestId);
-      const result = await operation(context);
-      if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+    let executing = false;
+    let responseFinished = false;
+    let expired = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const releaseWhenFinished = () => {
+      if (responseFinished && !executing) release?.();
+    };
+    const checkDeadline = () => {
+      if (expired || performance.now() - started >= APPLICATION_RESPONSE_DEADLINE_MS) {
+        expired = true;
         throw new ApplicationError('INTERNAL_ERROR');
       }
-      const validated = toolSchemas[name].output.safeParse({
-        ...result,
-        meta: { requestId },
+    };
+    try {
+      release = admission.enter();
+      const deadline = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          expired = true;
+          reject(new ApplicationError('INTERNAL_ERROR'));
+        }, APPLICATION_RESPONSE_DEADLINE_MS);
       });
-      if (!validated.success) throw new ApplicationError('INTERNAL_ERROR');
-      return {
-        content: [{ type: 'text', text: JSON.stringify(validated.data) }],
-        structuredContent: validated.data,
-      };
+      executing = true;
+      const execution = (async (): Promise<CallToolResult> => {
+        const context = await dependencies.context.resolve(requestId);
+        state.context = context;
+        // An expired context lookup must not initiate a new application operation.
+        checkDeadline();
+        const result = await operation(context);
+        if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+          throw new ApplicationError('INTERNAL_ERROR');
+        }
+        const validated = toolSchemas[name].output.safeParse({ ...result, meta: { requestId } });
+        if (!validated.success) throw new ApplicationError('INTERNAL_ERROR');
+        const response: CallToolResult = {
+          content: [{ type: 'text', text: JSON.stringify(validated.data) }],
+          structuredContent: validated.data,
+        };
+        // Count UTF-8 bytes of both success representations, including JSON escaping.
+        // The SDK-owned JSON-RPC framing is outside the application response limit.
+        if (Buffer.byteLength(JSON.stringify(response), 'utf8') > MAX_SUCCESS_RESPONSE_BYTES) {
+          throw new ApplicationError('INTERNAL_ERROR');
+        }
+        checkDeadline();
+        return response;
+      })().finally(() => {
+        executing = false;
+        releaseWhenFinished();
+      });
+      // Promise.race observes late rejection too; a deadline neither cancels nor
+      // releases application work which may still commit an audited mutation.
+      return await Promise.race([execution, deadline]);
     } catch (error: unknown) {
-      const safe = toApplicationError(error);
+      const overdue =
+        release !== undefined &&
+        (expired || performance.now() - started >= APPLICATION_RESPONSE_DEADLINE_MS);
+      const safe = overdue ? new ApplicationError('INTERNAL_ERROR') : toApplicationError(error);
       errorCategory = safe.code;
       const payload = safeErrorSchema.parse({
         error: { code: safe.code, message: safe.message, requestId },
@@ -95,19 +138,21 @@ export function createMcpServer(dependencies: {
         content: [{ type: 'text', text: JSON.stringify(payload) }],
       };
     } finally {
+      clearTimeout(timer);
       try {
         dependencies.logger.info({
           event: 'mcp.invocation',
           requestId,
           toolName: name,
-          actorUserId: context?.userId ?? null,
-          tenantId: context?.tenantId ?? null,
+          actorUserId: state.context?.userId ?? null,
+          tenantId: state.context?.tenantId ?? null,
           durationMs: Math.max(0, performance.now() - started),
           resultStatus: errorCategory === undefined ? 'success' : 'error',
           ...(errorCategory === undefined ? {} : { errorCategory }),
         });
       } finally {
-        release?.();
+        responseFinished = true;
+        releaseWhenFinished();
       }
     }
   }

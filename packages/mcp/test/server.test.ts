@@ -33,6 +33,26 @@ import { createReadFixture, fixtureId } from '@beloveddev/test-support/read-fixt
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMcpServer, type InvocationLog } from '../src/server.js';
 import { safeErrorSchema, toolSchemas } from '../src/schemas.js';
+import {
+  APPLICATION_RESPONSE_DEADLINE_MS,
+  InvocationAdmission,
+  MAX_SUCCESS_RESPONSE_BYTES,
+} from '../src/invocation-policy.js';
+
+function deferred<T>() {
+  let done: ((value: T) => void) | undefined;
+  let fail: ((reason: unknown) => void) | undefined;
+  const promise = new Promise<T>((resolve, reject) => {
+    done = resolve;
+    fail = reject;
+  });
+  return {
+    promise,
+    resolve: (value: T) => done?.(value),
+    reject: (reason: unknown) => fail?.(reason),
+  };
+}
+const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 function errorPayload(result: CallToolResult) {
   expect(result.isError).toBe(true);
@@ -68,6 +88,7 @@ describe('MCP SDK and application contracts', () => {
   let createNote: ReturnType<typeof vi.fn<ProjectNoteCreationRepository['create']>>;
   let release: ReturnType<typeof vi.fn<() => void>>;
   let enter: ReturnType<typeof vi.fn<() => (() => void) | null>>;
+  let admission: InvocationAdmission;
 
   beforeEach(async () => {
     fixture = createReadFixture();
@@ -75,6 +96,7 @@ describe('MCP SDK and application contracts', () => {
     logs = [];
     release = vi.fn<() => void>();
     enter = vi.fn<() => (() => void) | null>(() => release);
+    admission = new InvocationAdmission({ enter });
     const authorization = new PermissionAuthorization();
     const cursors = new SignedCursorCodec('contract-test-secret-at-least-32-bytes');
     const r = fixture.repositories;
@@ -173,7 +195,7 @@ describe('MCP SDK and application contracts', () => {
     server = createMcpServer({
       useCases,
       context: { resolve },
-      invocations: { enter },
+      admission,
       logger: {
         info: (record) => {
           logs.push(record);
@@ -186,12 +208,229 @@ describe('MCP SDK and application contracts', () => {
     await client.connect(clientTransport);
   });
   afterEach(async () => {
+    vi.useRealTimers();
     await client?.close();
     await server?.close();
     expect(release).toHaveBeenCalledTimes(
       enter.mock.results.filter((result) => result.type === 'return' && result.value === release)
         .length,
     );
+  });
+
+  it('shares eight slots across tools and SDK server instances, rejects immediately, and never queues', async () => {
+    const profile = await useCases.getProfile.execute(principal, {});
+    const projects = await useCases.listProjects.execute(principal, {});
+    const profileGate = deferred<typeof profile>();
+    const projectGate = deferred<typeof projects>();
+    const profileCall = vi
+      .spyOn(useCases.getProfile, 'execute')
+      .mockReturnValue(profileGate.promise);
+    const projectCall = vi
+      .spyOn(useCases.listProjects, 'execute')
+      .mockReturnValue(projectGate.promise);
+    resolve.mockClear();
+    const otherServer = createMcpServer({
+      useCases,
+      context: { resolve },
+      admission,
+      logger: { info: (record) => logs.push(record) },
+    });
+    const otherClient = new Client({ name: 'shared-capacity', version: '1' });
+    const [clientWire, serverWire] = InMemoryTransport.createLinkedPair();
+    await otherServer.connect(serverWire);
+    await otherClient.connect(clientWire);
+    const running = Promise.allSettled([
+      ...Array.from({ length: 4 }, () => client.callTool({ name: 'get_profile', arguments: {} })),
+      ...Array.from({ length: 4 }, () =>
+        otherClient.callTool({ name: 'list_projects', arguments: {} }),
+      ),
+    ]);
+    try {
+      await flush();
+      expect(profileCall).toHaveBeenCalledTimes(4);
+      expect(projectCall).toHaveBeenCalledTimes(4);
+      const denied = errorPayload(await client.callTool({ name: 'get_profile', arguments: {} }));
+      expect(denied.error.code).toBe('RATE_LIMITED');
+      expect(resolve).toHaveBeenCalledTimes(8);
+      profileGate.resolve(profile);
+      projectGate.resolve(projects);
+      const results = await running;
+      expect(
+        results.every((result) => result.status === 'fulfilled' && result.value.isError !== true),
+      ).toBe(true);
+      expect(resolve).toHaveBeenCalledTimes(8); // The rejected ninth request never runs later.
+      expect((await otherClient.callTool({ name: 'get_profile', arguments: {} })).isError).not.toBe(
+        true,
+      );
+      expect(resolve).toHaveBeenCalledTimes(9);
+    } finally {
+      profileGate.resolve(profile);
+      projectGate.resolve(projects);
+      await running;
+      await otherClient.close();
+      await otherServer.close();
+    }
+  });
+
+  it('recovers all capacity after ordinary failures without queuing rejected calls', async () => {
+    const gate = deferred<Awaited<ReturnType<GetProfile['execute']>>>();
+    const execute = vi.spyOn(useCases.getProfile, 'execute').mockReturnValue(gate.promise);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    const running = Promise.allSettled(
+      Array.from({ length: 8 }, () => client.callTool({ name: 'get_profile', arguments: {} })),
+    );
+    try {
+      await flush();
+      expect(execute).toHaveBeenCalledTimes(8);
+      expect(
+        errorPayload(await client.callTool({ name: 'get_profile', arguments: {} })).error.code,
+      ).toBe('RATE_LIMITED');
+      expect(resolve).toHaveBeenCalledTimes(8);
+      expect(execute).toHaveBeenCalledTimes(8);
+      gate.reject(new ApplicationError('NOT_FOUND'));
+      for (const result of await running) {
+        if (result.status !== 'fulfilled') throw result.reason;
+        expect(errorPayload(result.value).error.code).toBe('NOT_FOUND');
+      }
+      expect(vi.getTimerCount()).toBe(0);
+      const recovered = await Promise.all(
+        Array.from({ length: 8 }, () => client.callTool({ name: 'list_projects', arguments: {} })),
+      );
+      expect(recovered.every((result) => result.isError !== true)).toBe(true);
+      expect(resolve).toHaveBeenCalledTimes(16);
+      expect(execute).toHaveBeenCalledTimes(8);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      gate.reject(new ApplicationError('NOT_FOUND'));
+      await running;
+    }
+  });
+
+  it.each(['success', 'rejection'] as const)(
+    'retains timed-out work until late %s without duplicate logs or unhandled rejection',
+    async (outcome) => {
+      const profile = await useCases.getProfile.execute(principal, {});
+      const gate = deferred<typeof profile>();
+      vi.spyOn(useCases.getProfile, 'execute').mockReturnValue(gate.promise);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+      const running = Promise.allSettled(
+        Array.from({ length: 8 }, () => client.callTool({ name: 'get_profile', arguments: {} })),
+      );
+      try {
+        await flush();
+        await vi.advanceTimersByTimeAsync(APPLICATION_RESPONSE_DEADLINE_MS - 1);
+        expect(logs).toHaveLength(0);
+        expect(release).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        const results = await running;
+        const errors = results.map((entry) => {
+          if (entry.status !== 'fulfilled') throw entry.reason;
+          return errorPayload(entry.value).error;
+        });
+        expect(errors.every((error) => error.code === 'INTERNAL_ERROR')).toBe(true);
+        expect(new Set(errors.map((error) => error.requestId)).size).toBe(8);
+        expect(errors.map((error) => error.requestId)).toEqual(
+          resolve.mock.calls.map(([requestId]) => requestId),
+        );
+        expect(release).not.toHaveBeenCalled();
+        const rejected = errorPayload(
+          await client.callTool({ name: 'list_projects', arguments: {} }),
+        );
+        expect(rejected.error.code).toBe('RATE_LIMITED');
+        expect(resolve).toHaveBeenCalledTimes(8);
+        if (outcome === 'success') gate.resolve(profile);
+        else gate.reject(new Error('private-SQL-password-connection-details'));
+        await flush();
+        expect(release).toHaveBeenCalledTimes(9); // Eight executions and one rejected admission.
+        expect(logs).toHaveLength(9);
+        expect(
+          logs
+            .slice(0, 8)
+            .every((log) => log.resultStatus === 'error' && log.errorCategory === 'INTERNAL_ERROR'),
+        ).toBe(true);
+        expect(JSON.stringify(logs)).not.toContain('private-');
+        expect((await client.callTool({ name: 'list_projects', arguments: {} })).isError).not.toBe(
+          true,
+        );
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        gate.resolve(profile);
+        await running;
+        await flush();
+      }
+    },
+  );
+
+  it('does not initiate a use case when trusted-context resolution finishes after the deadline', async () => {
+    const gate = deferred<RequestContext | null>();
+    resolve.mockReturnValue(gate.promise);
+    const operation = vi.spyOn(useCases.getProfile, 'execute');
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    const response = client.callTool({ name: 'get_profile', arguments: {} });
+    await flush();
+    await vi.advanceTimersByTimeAsync(APPLICATION_RESPONSE_DEADLINE_MS);
+    expect(errorPayload(await response).error.code).toBe('INTERNAL_ERROR');
+    expect(release).not.toHaveBeenCalled();
+    gate.resolve(principal);
+    await flush();
+    expect(operation).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]?.actorUserId).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['success', 'failure'] as const)(
+    'rejects overdue %s even before the timer callback gets an event-loop turn',
+    async (outcome) => {
+      const clock = vi.spyOn(performance, 'now').mockReturnValue(0);
+      const execute = useCases.getProfile.execute.bind(useCases.getProfile);
+      vi.spyOn(useCases.getProfile, 'execute').mockImplementation(async (context, input) => {
+        const result = await execute(context, input);
+        clock.mockReturnValue(APPLICATION_RESPONSE_DEADLINE_MS);
+        if (outcome === 'failure') throw new ApplicationError('VALIDATION_ERROR');
+        return result;
+      });
+      expect(
+        errorPayload(await client.callTool({ name: 'get_profile', arguments: {} })).error.code,
+      ).toBe('INTERNAL_ERROR');
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(logs[0]?.durationMs).toBe(APPLICATION_RESPONSE_DEADLINE_MS);
+    },
+  );
+
+  it('counts the entire UTF-8 success object, includes JSON escaping, and accepts exactly one MiB', async () => {
+    const profile = await useCases.getProfile.execute(principal, {});
+    const withSummary = (summary: string) => ({
+      ...profile,
+      profile: { ...profile.profile, summary },
+    });
+    const encoded = (summary: string) => {
+      const data = toolSchemas.get_profile.output.parse({
+        ...withSummary(summary),
+        meta: { requestId: fixtureId(1) },
+      });
+      return JSON.stringify({
+        content: [{ type: 'text', text: JSON.stringify(data) }],
+        structuredContent: data,
+      });
+    };
+    const prefix =
+      (MAX_SUCCESS_RESPONSE_BYTES - Buffer.byteLength(encoded(''))) % 2 === 0 ? '' : '\n';
+    const base = Buffer.byteLength(encoded(prefix));
+    const exact = prefix + 'a'.repeat((MAX_SUCCESS_RESPONSE_BYTES - base) / 2);
+    vi.spyOn(useCases.getProfile, 'execute').mockResolvedValue(withSummary(exact));
+    const accepted = await client.callTool({ name: 'get_profile', arguments: {} });
+    expect(accepted.isError).not.toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(accepted))).toBe(MAX_SUCCESS_RESPONSE_BYTES);
+    for (const summary of [exact + 'a', '🚀'.repeat(150_000), '\\"\n'.repeat(100_000)]) {
+      expect(Buffer.byteLength(encoded(summary))).toBeGreaterThan(MAX_SUCCESS_RESPONSE_BYTES);
+      vi.spyOn(useCases.getProfile, 'execute').mockResolvedValue(withSummary(summary));
+      const denied = await client.callTool({ name: 'get_profile', arguments: {} });
+      expect(errorPayload(denied).error.code).toBe('INTERNAL_ERROR');
+      expect(JSON.stringify(denied).length).toBeLessThan(1000);
+    }
+    expect(logs.map((log) => log.resultStatus)).toEqual(['success', 'error', 'error', 'error']);
   });
 
   it('advertises seven read-only tools and one idempotent mutation with strict schemas', async () => {

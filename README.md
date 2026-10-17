@@ -5,7 +5,7 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 8-D
+## Current status: Milestone 8-E
 
 The stdio MCP server exposes eight tools backed by tenant-scoped
 PostgreSQL repositories. The tools `get_profile`, `list_projects`, `get_project`,
@@ -152,6 +152,35 @@ disconnect/stop action, which should close stdin or terminate the child. In a
 terminal, use Ctrl+C; the server handles SIGINT, SIGTERM, and stdin EOF by closing
 the transport and database pool. Fatal database pool/client errors use the same
 idempotent shutdown path and exit nonzero. See the lifecycle behavior below.
+
+## Invocation bounds
+
+The process admits at most eight executing application invocations across all
+eight tools, with no waiting queue. Saturation returns the existing safe
+`RATE_LIMITED` envelope before trusted-context lookup or use-case execution.
+Each admitted callback has a 30-second response deadline, including context
+resolution, execution, success validation, and serialization. Deadline expiry
+returns safe `INTERNAL_ERROR`; it does not cancel SQL or release the active slot.
+Work retains its capacity and shutdown lease until it actually settles. A context
+lookup finishing after expiry cannot start a new use case.
+
+Success responses are limited to 1 MiB (1,048,576 UTF-8 bytes) of the serialized
+MCP `CallToolResult`, including both JSON text `content` and `structuredContent`
+and their escaping. SDK JSON-RPC framing is outside this application limit.
+Oversized results return safe `INTERNAL_ERROR` without truncation or partial
+structured output. Errors remain small existing envelopes. These are fixed V1
+defaults, not tool arguments or environment overrides.
+
+Timeouts and response-size errors do not prove that a note/audit rolled back.
+An admitted write can commit after an error response. An explicit retry must use
+the original exact payload and idempotency key; if capacity is still occupied,
+it may receive `RATE_LIMITED`. The server never retries automatically. Response
+deadlines need an available Node event loop and do not preempt synchronous work;
+an elapsed-time check also rejects results that finish after the deadline.
+These application limits do not bound SDK input framing or PostgreSQL server
+resource consumption, and cannot guarantee response delivery to a disconnected
+client. Recover uncertain writes with the same trusted tenant and author as well
+as the identical payload and original idempotency key.
 
 ## Shutdown and connection failures
 
@@ -344,10 +373,11 @@ constraints, cleanup behavior, and Drizzle compatibility notes.
 All eight planned V1 tools are implemented through Milestone 7-B. M8-B adds the
 documented local trust boundary and protocol-safe launcher; M8-C bounds lifecycle
 cleanup and documents uncertain outcomes after disconnect. M8-D adds database
-transport policy and bounded schema/privilege readiness. Further Milestone 8
+transport policy and bounded schema/privilege readiness. M8-E bounds application
+admission, response time, and serialized success size. Further Milestone 8
 hardening remains unfinished; this slice is not a production-readiness claim.
 Known blockers include an approved production authentication profile, broader
-operational failure testing, resource/input-limit review,
+operational failure testing, request/input-limit review,
 release packaging, and a tested backup/recovery and migration deployment process.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
