@@ -728,6 +728,37 @@ resource consumption, and response delivery to disconnected clients are not full
 bounded by this policy. Explicit mutation recovery also requires the same trusted
 tenant and author. M8 as a whole is not declared production-ready.
 
+### Milestone 8-F — Local stdio Docker release (implemented)
+
+A multi-stage Dockerfile uses a digest-pinned official Node 24 slim base and
+locked npm installs with install hooks disabled. Build tools and test dependencies
+remain in build stages. The non-root release image contains production
+dependencies, compiled runtime workspaces, and the original full migration
+directory required by M8-D readiness. It launches Node directly, accepts runtime
+configuration only, publishes no port, and never runs migrations automatically.
+The Docker context uses an allowlist excluding local env files, registry
+configuration, credentials, host dependencies, compiled output, and test fixtures.
+
+`npm run test:container` builds the Linux artifact from an isolated source-only
+snapshot and compares it with a cold
+rebuild, inspects runtime contents/identity, and uses existing disposable TLS
+PostgreSQL fixtures with the approved restricted role. It initializes MCP,
+discovers/calls all eight tools, checks protocol-only stdout and structured
+stderr, tenant isolation and note/audit retry safety, EOF and actual SIGINT/SIGTERM
+shutdown, safe configuration/database-policy rejection, missing-migration
+readiness rejection, and absence of Node-owned TCP/UDP listeners. Linux CI runs this
+gate separately from the existing verification suite. Container run guidance
+uses a read-only filesystem, dropped capabilities, no-new-privileges, bounded
+resources, runtime secrets, and a shutdown grace exceeding M8-C's deadline.
+
+See [local stdio container operations](local-stdio-container.md). M8-C lifecycle,
+M8-D readiness/TLS, M8-E bounds, and production-local-auth rejection are unchanged.
+No remote hosting, HTTP, OAuth, new authentication mode, business feature,
+automatic migration/retry, or image publishing is added. M8 remains incomplete:
+M8-G dependency/image vulnerability maintenance and M8-H backup/recovery and
+migration deployment procedures remain separate work, along with production
+authentication approval. These follow-up slices are not implemented here.
+
 ---
 
 ## 11. Milestone 9 — Portfolio Documentation

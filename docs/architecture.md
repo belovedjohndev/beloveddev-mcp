@@ -1,10 +1,29 @@
 # BelovedDev MCP V1 — Architecture
 
-## Implemented architecture through Milestone 8-E
+## Implemented architecture through Milestone 8-F
 
 The stdio executable composes trusted local request context, application use
 cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
 logging. Database setup remains an explicit migration CLI action.
+
+M8-F adds a multi-stage Docker release for the same operator-controlled local
+stdio target. A digest-pinned Node 24 base and locked npm installs build the six
+runtime workspaces; only production dependencies, compiled artifacts, manifests,
+and original migration files enter the final image. The migration journal/SQL
+remain beside the database workspace for M8-D readiness. Runtime is UID/GID
+1000:1000 with a direct Node entry point and no npm, source/tests, baked secrets,
+HTTP listener, or automatic migrations. The supported run drops capabilities,
+uses a read-only filesystem, and injects protected configuration at runtime.
+The Linux container smoke test verifies the artifact against disposable TLS
+PostgreSQL with approved restricted credentials, all eight tools, mutation retry
+and tenant safety, protocol-only stdout, startup rejection, EOF, and SIGINT/SIGTERM.
+Builds use an isolated source-only snapshot, never host dependencies or compiled
+output. Runtime probes check Node-owned sockets and fail readiness when the
+migration directory is masked, without changing the release or database schema.
+M8-C/M8-D/M8-E and the production-local-auth rejection are unchanged. Packaging
+does not turn the local principal assertion into independent authentication.
+See the [container operating guide](local-stdio-container.md) for the launcher,
+Docker trust boundary, release reproducibility, and remaining limitations.
 
 M8-E adds a process-owned `InvocationAdmission` in `packages/mcp/src/invocation-policy.ts`.
 It is shared across SDK discovery/legacy server factories and composes with the

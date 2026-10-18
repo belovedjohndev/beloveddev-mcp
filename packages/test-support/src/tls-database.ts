@@ -65,6 +65,7 @@ export async function createTlsPostgres() {
     const port = /127\.0\.0\.1:(\d+)/.exec(endpoint)?.[1];
     if (port === undefined) throw new Error('Unexpected TLS PostgreSQL port');
     return {
+      containerName: name,
       ca,
       url: `postgresql://postgres:${password}@localhost:${port}/postgres?sslmode=verify-full`,
       close,

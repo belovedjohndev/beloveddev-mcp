@@ -1,0 +1,2 @@
+# Readiness hashes the original migration bytes. Preserve them on every OS.
+/packages/database/migrations/** -text

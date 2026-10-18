@@ -26,6 +26,7 @@
     "db:down": "docker compose down",
     "db:logs": "docker compose logs -f postgres",
     "test:integration": "npm run build \u0026\u0026 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts",
+    "test:container": "npm run build && node scripts/container-smoke.ts",
     "db:generate": "npm run build \u0026\u0026 drizzle-kit generate --config=packages/database/drizzle.config.ts",
     "db:check": "drizzle-kit check --config=packages/database/drizzle.config.ts",
     "db:migrate": "npm run build \u0026\u0026 node --env-file-if-exists=.env scripts/migrate.ts",

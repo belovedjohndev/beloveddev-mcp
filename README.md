@@ -5,7 +5,7 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 8-E
+## Current status: Milestone 8-F
 
 The stdio MCP server exposes eight tools backed by tenant-scoped
 PostgreSQL repositories. The tools `get_profile`, `list_projects`, `get_project`,
@@ -121,6 +121,23 @@ directory; absolute paths avoid that dependency.
 Do not configure an MCP client to launch npm: its lifecycle banner writes to
 stdout. The supported client launch path is direct Node, with stdout reserved
 for MCP protocol messages and application logs on stderr.
+
+## Local stdio release image
+
+M8-F adds a digest-pinned Node 24 multi-stage image with production dependencies,
+compiled workspaces, and the migration files needed by M8-D readiness. It runs
+Node directly as non-root; configuration and secrets are supplied only at runtime.
+Use `npm run test:container` to build and verify the Linux artifact with disposable
+TLS PostgreSQL and restricted runtime credentials. See the
+[container operating guide](docs/local-stdio-container.md) for build commands,
+MCP client configuration, database networking, resource restrictions, and shutdown.
+The image preserves the local-only authentication profile and rejects
+`NODE_ENV=production`; it is not approval for remote multi-user deployment.
+The gate builds from a source-only snapshot, checks for application listeners,
+and proves missing packaged migrations prevent readiness. Native Windows can
+continue using the [direct Node launcher](#direct-node-mcp-launcher).
+M8-G vulnerability maintenance and M8-H backup/migration operations remain;
+Milestone 8 is not complete.
 
 ## Local stdio trust boundary
 
@@ -374,11 +391,13 @@ All eight planned V1 tools are implemented through Milestone 7-B. M8-B adds the
 documented local trust boundary and protocol-safe launcher; M8-C bounds lifecycle
 cleanup and documents uncertain outcomes after disconnect. M8-D adds database
 transport policy and bounded schema/privilege readiness. M8-E bounds application
-admission, response time, and serialized success size. Further Milestone 8
+admission, response time, and serialized success size. M8-F packages and verifies
+the local stdio release container. Further Milestone 8
 hardening remains unfinished; this slice is not a production-readiness claim.
 Known blockers include an approved production authentication profile, broader
 operational failure testing, request/input-limit review,
-release packaging, and a tested backup/recovery and migration deployment process.
+release vulnerability review and update ownership, and a tested backup/recovery
+and migration deployment process.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
 [PostgreSQL image initialization and storage](https://hub.docker.com/_/postgres),
