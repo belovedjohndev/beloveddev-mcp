@@ -761,6 +761,38 @@ authentication approval. These follow-up slices are not implemented here.
 
 ---
 
+### Milestone 8-H1 — Safe serialized migrations (implemented)
+
+The administrative CLI requires `DATABASE_MIGRATION_URL` and optional private CA
+`DATABASE_MIGRATION_TLS_CA`, independently of runtime/test settings. It preserves
+M8-D verified TLS and explicit endpoint/session policy, with no credential fallback.
+One owned pg session holds a deterministic database-scoped advisory lock while
+the unchanged Drizzle migrator executes. Exact ledger prefix/full verification
+detects mismatches instead of silently skipping or repairing history.
+
+Dedicated configurable defaults bound connection (5s), advisory acquisition (10s),
+other lock waits (5s), individual SQL (120s), and overall execution (300s), with at
+most 5s additional disconnect cleanup. PostgreSQL timeouts and socket destruction
+bound underlying work; operation expiry, SIGINT/SIGTERM, and connection loss
+return nonzero safe diagnostics without claiming rollback. No automatic retries
+or runtime startup migrations exist. The original ledger scaffolding can survive
+a failed first transaction; an uncertain commit requires operator inspection.
+
+Real PostgreSQL 18 tests exercise independent CLI processes, held-lock contention,
+same-backend DDL/lock ownership, repeated history preservation, SQL failure,
+statement/lock/operation/connect deadlines, interruption/termination, backend loss,
+cleanup, drift/readiness rejection, restricted-runtime privileges, and TLS policy.
+Tests create only unique disposable databases using explicit administrator
+credentials. They leave existing development data and persistent volumes intact.
+See [technical specification](m8-h1-migration-spec.md) and
+[operator procedure](database.md#m8-h1-administrative-execution-policy).
+
+M8-H2 remains open: backup creation, backup verification, restore drills, and
+recovery objectives. M8-H and Milestone 8 are not complete. This slice imports no
+M8-G changes and changes no schema, MCP contract, or authentication behavior.
+
+---
+
 ## 11. Milestone 9 — Portfolio Documentation
 
 ### Goal

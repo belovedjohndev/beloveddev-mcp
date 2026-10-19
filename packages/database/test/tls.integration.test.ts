@@ -3,6 +3,7 @@ import { createTlsPostgres } from '@beloveddev/test-support/tls-database';
 import { createTestDatabase } from '@beloveddev/test-support/test-database';
 import { openDatabase } from '../src/client.js';
 import { assertRuntimeDatabaseReady } from '../src/readiness.js';
+import { migrateDatabase, parseMigrationEnvironment } from '../src/migrate.js';
 
 describe('PostgreSQL TLS transport', () => {
   let tls: Awaited<ReturnType<typeof createTlsPostgres>>;
@@ -46,5 +47,28 @@ describe('PostgreSQL TLS transport', () => {
     } finally {
       await connection.close();
     }
+  });
+
+  it('enforces verified TLS for administrative migrations without runtime CA fallback', async () => {
+    await expect(
+      migrateDatabase(
+        parseMigrationEnvironment({
+          DATABASE_MIGRATION_URL: tls.url,
+          DATABASE_TLS_CA: tls.ca,
+        }),
+      ),
+    ).rejects.toMatchObject({ category: 'CONNECTION' });
+    const wrongHost = new URL(tls.url);
+    wrongHost.hostname = '127.0.0.1';
+    await expect(
+      migrateDatabase(
+        parseMigrationEnvironment({
+          DATABASE_MIGRATION_URL: wrongHost.href,
+          DATABASE_MIGRATION_TLS_CA: tls.ca,
+        }),
+      ),
+    ).rejects.toMatchObject({ category: 'CONNECTION' });
+    // The existing successful TLS test provisions its disposable database through
+    // the same executor, with the dedicated administrative CA passed explicitly.
   });
 });

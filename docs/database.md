@@ -285,9 +285,11 @@ npm run db:migrate
 
 Generation loads the TypeScript schema and creates SQL plus metadata. Review and
 commit all three; do not edit an applied migration. `db:check` validates Drizzle's
-migration history. `db:migrate` uses the validated `DATABASE_URL`, applies SQL
-through Drizzle's transactional migrator, and closes its pool. It can be rerun
-without reapplying recorded migrations. Run one migration process at a time.
+migration history. `db:migrate` requires the explicit administrative
+`DATABASE_MIGRATION_URL` and optional `DATABASE_MIGRATION_TLS_CA`. It never falls
+back to runtime or test credentials/CA. It serializes through PostgreSQL, validates
+the recorded history, uses Drizzle's transactional migrator, and closes its
+dedicated session. Repeated execution preserves existing ledger hashes and IDs.
 Schema push is not part of this workflow.
 
 Database URLs are supplied per process. Migration commands require an owner/migration
@@ -304,6 +306,138 @@ from the administrative configuration; never inject that variable or Compose's
 administrator password into the MCP subprocess. Existing process values override
 env-file values, so clear stale administrator `DATABASE_URL` exports before launching
 the server. The readiness gate will reject an accidentally inherited privileged URL.
+
+### M8-H1 administrative execution policy
+
+Use an owner/migration login with CONNECT, database/schema CREATE and ownership
+of the existing migration objects (or a deliberately provisioned equivalent).
+The migration process never grants privileges or promotes the runtime role.
+Keep all administrative variables out of MCP launchers, including
+`DATABASE_MIGRATION_URL`, its CA, `TEST_DATABASE_URL`, and Compose passwords.
+The CLI needs no MCP identity, cursor secret, runtime URL, or NODE_ENV setting.
+
+The dedicated policy reuses M8-D's URL validation: explicit username, password,
+host, port, and database; loopback-only plaintext; remote `sslmode=verify-full`
+with certificate-chain/hostname verification and TLS 1.2 minimum. Private CA PEM
+contents use only `DATABASE_MIGRATION_TLS_CA` (1–65,536 characters). Only unique
+`sslmode` and `application_name` URL parameters are accepted; the migration
+session always uses `application_name=beloveddev-migrate`. Endpoint, session-role,
+and TLS URL overrides are rejected. Explicit driver fields override ambient PG*
+endpoint, credentials, SSL negotiation, client encoding, and session options.
+As with runtime, protect the selected env file and remove stale exported
+`DATABASE_MIGRATION_*` values: Node process variables take precedence over files.
+
+After building, these commands work from the repository root (quote paths with
+spaces). Neither command performs a backup:
+
+```powershell
+npm run build
+node --env-file="C:/protected/migrations.env" scripts/migrate.ts
+```
+
+```sh
+npm run build
+node --env-file=/protected/migrations.env scripts/migrate.ts
+```
+
+Alternatively `npm run db:migrate` builds and reads the optional repository `.env`;
+inject the explicit migration variables or place them in a protected admin-only
+file. Do not put administrator secrets in a shared runtime env file.
+
+The executor owns one physical `pg.Client`, never a pool. PostgreSQL's session
+advisory lock `(0x42444556, 1)` is database-scoped and held by that same session
+through ledger preflight, actual Drizzle DDL/transaction/commit, and postflight.
+Executors targeting one database queue at this lock; different databases do not
+block each other. Successful execution explicitly unlocks, verifies release, and
+closes the connection before reporting success. Failure destroys the owned socket;
+the server releases the session lock when it detects termination. Arbitrary
+administrative SQL or an older migration executable can bypass this cooperative
+protocol: require all deployment operators to use the reviewed executor.
+
+| Limit                | Default              | Administrative override                       | Reason                                                   |
+| -------------------- | -------------------- | --------------------------------------------- | -------------------------------------------------------- |
+| Connect/auth/TLS     | 5 seconds            | `DATABASE_MIGRATION_CONNECT_TIMEOUT_MS`       | Fail promptly on unreachable/stalled endpoints           |
+| Advisory acquisition | 10 seconds           | `DATABASE_MIGRATION_ADVISORY_LOCK_TIMEOUT_MS` | Permit short overlap without waiting indefinitely        |
+| Each other lock wait | 5 seconds            | `DATABASE_MIGRATION_LOCK_TIMEOUT_MS`          | Bound impact from active runtime transactions            |
+| Each SQL statement   | 120 seconds          | `DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS`     | Allow V1 DDL longer than runtime's 10-second policy      |
+| Overall operation    | 300 seconds          | `DATABASE_MIGRATION_OPERATION_TIMEOUT_MS`     | Bound connection, lock, migration, and verification work |
+| Cleanup ceiling      | 5 additional seconds | Fixed                                         | Bound disconnect even after operation expiry             |
+
+Overrides are positive decimal integer milliseconds, at most 3,600,000 per value;
+zero, signs, whitespace, fractions, exponent notation, and unbounded values fail
+closed. The overall deadline can expire before any individual limit. During lock
+acquisition both PostgreSQL lock_timeout and statement_timeout use the advisory
+limit; afterward the separate DDL limits apply. PostgreSQL transaction_timeout
+uses the remaining overall budget before migration execution. Idle transactions
+also have the statement-duration ceiling. An absolute monotonic timer destroys
+the socket on expiry; this is not merely a Promise timeout. PostgreSQL timeouts
+bound remote work even if disconnect detection is delayed. Large production
+datasets need reviewed DDL planning and explicitly chosen bounds; these defaults
+are intended for the current small V1 schema, not measured production capacity.
+The server-side behavior follows PostgreSQL 18's
+[timeout policy](https://www.postgresql.org/docs/18/runtime-config-client.html)
+and [advisory lock semantics](https://www.postgresql.org/docs/18/explicit-locking.html#ADVISORY-LOCKS).
+
+### Failure diagnosis and manual recovery
+
+All CLI failures return nonzero with one safe structured stderr event,
+`database.migration_failed`, `outcome=unconfirmed`, duration, and category:
+`CONFIGURATION`, `CONNECTION`, `IDENTITY`, `MIGRATION_FILES`, `LEDGER`,
+`ADVISORY_LOCK_TIMEOUT`, `LOCK_TIMEOUT`, `STATEMENT_TIMEOUT`, `SQL_FAILURE`,
+`INTERRUPTED`, `OPERATION_TIMEOUT`, `CLEANUP`, or unexpected `INTERNAL`.
+No raw exception, SQL, parameters, URL, password, CA, or filesystem path is logged.
+SIGINT/SIGTERM use the same abort/cleanup path. Forced Windows termination and
+SIGKILL cannot run handlers. No failure initiates an automatic retry.
+
+Drizzle 0.45.3 creates its schema/ledger scaffolding outside its migration
+transaction. It applies all pending committed SQL and ledger rows in one
+transaction using the dedicated client. The existing chain uses transactional
+DDL; future SQL must be reviewed for transaction compatibility. A failed first
+run may leave empty ledger scaffolding. Connection loss near COMMIT may mean the
+transaction committed without an acknowledgement. Neither a timeout, an abort,
+nor nonzero exit proves rollback. Do not infer rollback from an absent CLI success
+message. Server disconnect detection/rollback may finish after client cleanup.
+
+Before Drizzle executes, the ledger must exactly match a prefix of the committed
+hash/timestamp sequence. Afterward it must match the complete sequence. Gaps,
+duplicates, changed hashes/timestamps, or future entries fail with `LEDGER`.
+Drizzle's own latest-timestamp check is insufficient for this invariant. Missing
+or malformed ledger structures fail safely; nothing edits history automatically.
+This executor does not certify arbitrary schema drift: M8-D remains authoritative.
+
+1. Stop deployment orchestration; keep the runtime stopped if readiness fails.
+   Preserve diagnostics and the exact deployed migration artifact/SQL bytes.
+2. As a trusted administrator on the intended database, inspect `pg_stat_activity`
+   for `application_name='beloveddev-migrate'` and `pg_locks` for advisory keys
+   classid=1111770454, objid=1, objsubid=2 in that database. Verify the session's
+   identity before taking action. Do not kill an unidentified backend or bypass a
+   held lock. Wait for a known executor to finish or escalate to its owner.
+3. Inspect `SELECT id, hash, created_at FROM drizzle.__drizzle_migrations ORDER BY
+created_at, id` read-only. Compare every row with the reviewed journal and the
+   SHA-256 of the exact committed SQL bytes. An absent table can be normal before
+   the first run; unexplained history/schema disagreement requires investigation.
+   Do not delete ledger rows, regenerate applied SQL, or stamp versions manually.
+4. Once the prior session/transaction has ended and history is an intact prefix,
+   inspect the actual schema for partial or out-of-band work. Resolve only through
+   a reviewed manual incident/change procedure. No automatic drift repair exists.
+5. A manual rerun with the same reviewed artifacts is safe only after establishing
+   that the target, history, schema, and ownership are consistent. A fully current
+   ledger results in no reapplication. Lost commit acknowledgements require this
+   inspection before deciding to rerun. Lock contention alone is safe to retry
+   manually once the known holder has released the lock.
+6. Provision/verify the separate least-privilege runtime role using the SQL below.
+   Launch the compiled runtime with its minimal protected runtime env file. Its
+   read-only M8-D probe checks PostgreSQL 18, identity, schema signature, complete
+   ledger, and effective grants before emitting `mcp.ready`. Nonzero startup or
+   missing readiness must be investigated; migrations never bypass that gate.
+
+The direct Node entrypoint leaves stdout empty and logs on stderr; the npm wrapper
+also prints build/lifecycle output. PostgreSQL's own administrator
+logs may contain SQL under server logging policies and require separate access
+controls. Advisory locks do not provide backups, rollback after commit, zero
+downtime, or a substitute for operational monitoring. Backup creation, backup
+verification, restore drills, and recovery objectives belong to M8-H2 and are not
+implemented here. M8-H and Milestone 8 remain incomplete.
 
 For a local runtime role, provision privileges outside schema migrations so
 environment-specific credentials are never committed. For example, using psql
@@ -469,6 +603,7 @@ $env:POSTGRES_PORT = '0'
 docker compose --env-file .env.example up -d --wait
 $databaseEndpoint = (docker compose --env-file .env.example port postgres 5432).Trim()
 $env:DATABASE_URL = "postgresql://beloveddev:beloveddev_local_only@$databaseEndpoint/beloveddev"
+$env:DATABASE_MIGRATION_URL = $env:DATABASE_URL
 $env:TEST_DATABASE_URL = $env:DATABASE_URL
 npm run db:migrate
 npm run verify:all

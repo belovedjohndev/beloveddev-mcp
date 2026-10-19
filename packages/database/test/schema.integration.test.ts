@@ -3,7 +3,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rmdir, unlink, writeFile } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
-import { migrateDatabase } from '@beloveddev/database/migrate';
+import { migrateDatabase, parseMigrationEnvironment } from '@beloveddev/database/migrate';
 import {
   auditLogs,
   clients,
@@ -110,7 +110,9 @@ describe('real PostgreSQL migration and constraints', () => {
       'tenants',
       'users',
     ]);
-    await migrateDatabase(database.admin.db);
+    await migrateDatabase(
+      parseMigrationEnvironment({ DATABASE_MIGRATION_URL: database.migrationUrl }),
+    );
     const journal = await database.admin.pool.query<{ count: number }>(
       'SELECT count(*)::int AS count FROM drizzle.__drizzle_migrations',
     );

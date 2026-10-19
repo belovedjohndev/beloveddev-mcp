@@ -50,13 +50,13 @@ Run commands from the repository root.
    Keep the example administrator configuration in a separate protected file for
    migrations/tests; replace `.env` with a minimal runtime configuration containing
    the restricted `DATABASE_URL`, MCP settings, and log settings. Do not inject
-   `POSTGRES_PASSWORD` or `TEST_DATABASE_URL` into the server process. The example
+   `POSTGRES_PASSWORD`, `TEST_DATABASE_URL`, or `DATABASE_MIGRATION_*` into the server process. The example
    Compose superuser is now rejected by the server's startup gate.
 7. Launch the compiled server directly with Node using the instructions below:
    `node --env-file=.env apps/mcp-server/dist/main.js`.
 
 If port 5432 is already occupied, choose a free port in `POSTGRES_PORT` and
-update `DATABASE_URL` and `TEST_DATABASE_URL` to match before starting Compose.
+update `DATABASE_URL`, `DATABASE_MIGRATION_URL`, and `TEST_DATABASE_URL` to match before starting Compose.
 The [database guide](docs/database.md) includes a PowerShell workflow that asks
 Docker for an available host port.
 
@@ -136,7 +136,7 @@ The image preserves the local-only authentication profile and rejects
 The gate builds from a source-only snapshot, checks for application listeners,
 and proves missing packaged migrations prevent readiness. Native Windows can
 continue using the [direct Node launcher](#direct-node-mcp-launcher).
-M8-G vulnerability maintenance and M8-H backup/migration operations remain;
+M8-G vulnerability maintenance and M8-H2 backup/recovery operations remain;
 Milestone 8 is not complete.
 
 ## Local stdio trust boundary
@@ -259,7 +259,7 @@ on Windows. Shutdown deadlines depend on the Node event loop being able to run.
 | `npm run verify:all`       | Run all checks, including integration tests and migration history validation |
 | `npm run db:generate`      | Generate reviewed Drizzle SQL migrations and metadata                        |
 | `npm run db:check`         | Validate Drizzle migration history                                           |
-| `npm run db:migrate`       | Apply committed migrations using DATABASE_URL                                |
+| `npm run db:migrate`       | Apply committed migrations using explicit DATABASE_MIGRATION_URL             |
 | `npm start`                | Terminal convenience only; MCP clients must use the direct Node launcher     |
 | `npm run db:up`            | Start PostgreSQL and wait for its health check                               |
 | `npm run db:down`          | Stop PostgreSQL, retaining the data volume                                   |
@@ -296,20 +296,22 @@ of Drizzle and concrete adapters.
 
 ## Configuration
 
-| Variable              | Default                        | Purpose                                                                    |
-| --------------------- | ------------------------------ | -------------------------------------------------------------------------- |
-| `NODE_ENV`            | `development`                  | `development`, `test`, or `production`                                     |
-| `LOG_LEVEL`           | `info`                         | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, or `silent`            |
-| `DATABASE_URL`        | Required                       | PostgreSQL URL with a host and database name                               |
-| `MCP_AUTH_MODE`       | Required                       | `local`; rejected in production pending an approved authentication profile |
-| `MCP_CURSOR_SECRET`   | Required                       | Cursor HMAC secret, 32–1024 characters                                     |
-| `MCP_LOCAL_TENANT_ID` | Optional                       | Trusted local operator tenant UUID; requires `MCP_LOCAL_USER_ID`           |
-| `MCP_LOCAL_USER_ID`   | Optional                       | Trusted local operator user UUID; requires `MCP_LOCAL_TENANT_ID`           |
-| `TEST_DATABASE_URL`   | Required for integration tests | Dedicated test-instance admin connection; never falls back to DATABASE_URL |
-| `POSTGRES_USER`       | Required by Compose            | Local database administrator                                               |
-| `POSTGRES_PASSWORD`   | Required by Compose            | Local database password                                                    |
-| `POSTGRES_DB`         | Required by Compose            | Local database name                                                        |
-| `POSTGRES_PORT`       | `5432`                         | Host port, bound to `127.0.0.1`                                            |
+| Variable                    | Default                        | Purpose                                                                    |
+| --------------------------- | ------------------------------ | -------------------------------------------------------------------------- |
+| `NODE_ENV`                  | `development`                  | `development`, `test`, or `production`                                     |
+| `LOG_LEVEL`                 | `info`                         | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, or `silent`            |
+| `DATABASE_URL`              | Required                       | PostgreSQL URL with a host and database name                               |
+| `DATABASE_MIGRATION_URL`    | Required for migration CLI     | Separate administrative URL; no runtime/test fallback                      |
+| `DATABASE_MIGRATION_TLS_CA` | Optional for migration CLI     | Private CA PEM; requires verify-full; no runtime CA fallback               |
+| `MCP_AUTH_MODE`             | Required                       | `local`; rejected in production pending an approved authentication profile |
+| `MCP_CURSOR_SECRET`         | Required                       | Cursor HMAC secret, 32–1024 characters                                     |
+| `MCP_LOCAL_TENANT_ID`       | Optional                       | Trusted local operator tenant UUID; requires `MCP_LOCAL_USER_ID`           |
+| `MCP_LOCAL_USER_ID`         | Optional                       | Trusted local operator user UUID; requires `MCP_LOCAL_TENANT_ID`           |
+| `TEST_DATABASE_URL`         | Required for integration tests | Dedicated test-instance admin connection; never falls back to DATABASE_URL |
+| `POSTGRES_USER`             | Required by Compose            | Local database administrator                                               |
+| `POSTGRES_PASSWORD`         | Required by Compose            | Local database password                                                    |
+| `POSTGRES_DB`               | Required by Compose            | Local database name                                                        |
+| `POSTGRES_PORT`             | `5432`                         | Host port, bound to `127.0.0.1`                                            |
 
 `DATABASE_URL` validation checks URL structure, not connectivity. Both `postgres:`
 and `postgresql:` schemes are accepted. Keep the URL aligned with Compose settings;
@@ -333,6 +335,22 @@ Compose uses the official `postgres:18` image, a health check, localhost-only
 port publication, and a named volume mounted at `/var/lib/postgresql`. The major
 version is fixed; patch image updates are intentional. Apply the committed schema
 using `npm run db:migrate`; Compose itself does not apply migrations.
+
+M8-H1 migrations use an explicit administrative process, separate from runtime.
+After building, run `node --env-file=/protected/migrations.env scripts/migrate.ts`
+(PowerShell also accepts a quoted `C:/protected/migrations.env` path), or inject
+`DATABASE_MIGRATION_URL` and run `npm run db:migrate`. Remote endpoints require
+`sslmode=verify-full`; the optional private CA is `DATABASE_MIGRATION_TLS_CA`.
+One dedicated session holds a database-scoped advisory lock while Drizzle applies
+and verifies the original migration chain. Defaults: connect 5s, advisory wait 10s,
+other lock waits 5s, SQL 120s, overall 300s, cleanup at most 5s additional.
+Positive integer administrative timeout overrides and failure/recovery steps are
+documented in the [migration operations guide](docs/database.md#m8-h1-administrative-execution-policy).
+Failures return safe structured stderr categories and nonzero status; a lost
+commit response does not prove rollback. There are no automatic retries, ledger
+repairs, or startup migrations. Runtime M8-D readiness remains mandatory.
+Backup creation/verification, restore drills, and recovery objectives are M8-H2;
+M8-H and Milestone 8 remain incomplete.
 
 The example credentials are public and for isolated local development only.
 The official image creates `POSTGRES_USER` as a superuser. Use this local role for
@@ -392,12 +410,14 @@ documented local trust boundary and protocol-safe launcher; M8-C bounds lifecycl
 cleanup and documents uncertain outcomes after disconnect. M8-D adds database
 transport policy and bounded schema/privilege readiness. M8-E bounds application
 admission, response time, and serialized success size. M8-F packages and verifies
-the local stdio release container. Further Milestone 8
+the local stdio release container. M8-H1 adds bounded, serialized administrative
+migrations with verified history and documented interrupted-operation recovery.
+Further Milestone 8
 hardening remains unfinished; this slice is not a production-readiness claim.
 Known blockers include an approved production authentication profile, broader
 operational failure testing, request/input-limit review,
-release vulnerability review and update ownership, and a tested backup/recovery
-and migration deployment process.
+release vulnerability review and update ownership, and M8-H2 backup creation,
+verification, restore drills, and recovery objectives.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
 [PostgreSQL image initialization and storage](https://hub.docker.com/_/postgres),

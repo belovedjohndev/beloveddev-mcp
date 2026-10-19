@@ -1,10 +1,31 @@
 # BelovedDev MCP V1 — Architecture
 
-## Implemented architecture through Milestone 8-F
+## Implemented architecture through Milestone 8-F and M8-H1
 
 The stdio executable composes trusted local request context, application use
 cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
 logging. Database setup remains an explicit migration CLI action.
+
+M8-H1 confines administrative migrations to `scripts/migrate.ts` and the database
+adapter. The CLI parses only dedicated `DATABASE_MIGRATION_*` settings; no runtime
+credential or CA fallback exists. A dedicated `pg.Client` owns the physical socket
+and database-scoped session advisory lock `(0x42444556, 1)`. Drizzle receives that
+same client, preserving its committed SQL, hashes, ledger, and transaction behavior.
+Exact ledger-prefix preflight and complete postflight reject history problems
+without repair. PostgreSQL enforces advisory/DDL lock and statement timeouts, with
+a remaining-budget transaction timeout; the process has an absolute operation
+deadline and bounded disconnect. Errors, signals, and connection loss fail closed
+with safe categories, no automatic retry, and no unproven rollback assertion.
+Connect/advisory/DDL-lock/statement/operation defaults are 5s/10s/5s/120s/300s,
+plus at most 5s cleanup. Runtime pools and M8-D policy are unchanged: startup never
+migrates or grants privileges and still verifies schema/ledger/effective grants.
+No domain, application, tenancy, authentication, or MCP contract changes occur.
+The [migration specification](m8-h1-migration-spec.md) records inspected Drizzle
+internals; [operations](database.md#m8-h1-administrative-execution-policy) cover
+credential/TLS policy, limits, diagnostics, and manual incident recovery.
+Advisory locking requires cooperating administrative executors and cannot prevent
+arbitrary privileged SQL. Backup creation/verification, restore drills, and recovery
+objectives remain M8-H2. M8-H and Milestone 8 are incomplete.
 
 M8-F adds a multi-stage Docker release for the same operator-controlled local
 stdio target. A digest-pinned Node 24 base and locked npm installs build the six
