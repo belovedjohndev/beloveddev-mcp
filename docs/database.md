@@ -435,9 +435,32 @@ The direct Node entrypoint leaves stdout empty and logs on stderr; the npm wrapp
 also prints build/lifecycle output. PostgreSQL's own administrator
 logs may contain SQL under server logging policies and require separate access
 controls. Advisory locks do not provide backups, rollback after commit, zero
-downtime, or a substitute for operational monitoring. Backup creation, backup
-verification, restore drills, and recovery objectives belong to M8-H2 and are not
-implemented here. M8-H and Milestone 8 remain incomplete.
+downtime, or a substitute for operational monitoring. M8-H2 implements separate
+logical backup validation and isolated restore drills; see the
+[recovery runbook](recovery.md). Deployment-specific RPO/RTO, scheduling,
+retention and encrypted/off-site storage still require owner decisions.
+Milestone 8 remains incomplete.
+
+### M8-H2 recovery boundary
+
+`database/recovery` runs PostgreSQL 18 pg_dump/pg_restore outside MCP startup.
+Explicit backup and restore administrator URLs/CA settings never fall back to
+runtime/test/migration credentials. The H1 shared lock and exported read-only
+snapshot bind the dump to deterministic full-row digests for all eleven tables
+and the complete migration ledger. Private new-only artifact directories hold a
+custom archive and strict Zod completion/integrity metadata. Validation checks
+the entire archive; a real isolated restore is required to prove recoverability.
+
+Restores create only generated disposable databases/roles. They never accept an
+existing destination name, restore source grants/ownership, or replace production.
+Strict transactional pg_restore is followed by exact data, ledger and reviewed
+schema verification, explicit reconstruction of the existing M8-D runtime grants,
+and unchanged restricted-role readiness. Catalog ownership/OIDs are verified
+before target retirement. Interruption/deadlines fail closed without claiming
+rollback; cleanup failure remains failure. The runbook covers platform permissions,
+TLS, encryption responsibilities, manual incident recovery and owner decisions.
+Real PostgreSQL drills verify MCP reads, tenant refusal, search indexes, audited
+note identity and retry without duplicate audit. No schema/MCP/auth changes occur.
 
 For a local runtime role, provision privileges outside schema migrations so
 environment-specific credentials are never committed. For example, using psql

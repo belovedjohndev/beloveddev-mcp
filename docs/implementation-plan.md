@@ -787,9 +787,44 @@ credentials. They leave existing development data and persistent volumes intact.
 See [technical specification](m8-h1-migration-spec.md) and
 [operator procedure](database.md#m8-h1-administrative-execution-policy).
 
-M8-H2 remains open: backup creation, backup verification, restore drills, and
-recovery objectives. M8-H and Milestone 8 are not complete. This slice imports no
+M8-H2 follows below for backup creation, backup verification, restore drills, and
+recovery objectives. Milestone 8 is not complete. This slice imports no
 M8-G changes and changes no schema, MCP contract, or authentication behavior.
+
+---
+
+### Milestone 8-H2 — Verified logical backup and isolated recovery (implemented)
+
+Dedicated source/control administrator settings and PostgreSQL 18 native clients
+provide shell-free custom-format pg_dump and strict single-transaction pg_restore.
+M8-D TLS policy is preserved; secrets are passed through private passfiles, with
+explicit libpq fields and no runtime/test/migration fallback. The H1 shared lock
+and exported read-only snapshot bind the backup to complete table digests, schema,
+and migration history. Existing artifacts are refused; strict versioned metadata
+is published after archive magic/TOC/full traversal, size and SHA-256 validation.
+
+Restore drills accept no target name. They create generated disposable databases
+and roles, verify identity and exact restored data/schema/ledger, provision the
+existing restricted grants, and run unchanged M8-D readiness. Owned processes,
+sessions, callbacks and retirement have finite deadlines; errors/interruption
+never claim unverified rollback. Catalog ownership/OIDs constrain destructive
+cleanup to generated resources. No production replacement is automated.
+
+Real PostgreSQL tests seed every table across two tenants and create an audited
+note through the actual MCP/application mutation. Repeated restores preserve
+all rows, constraints/indexes/search, tenant scope, ledger, schema and original
+note retry without duplicate audit. Failure coverage includes archive corruption,
+truncation, paths/overwrite, credentials/client version, missing ledger, native
+process termination, deadlines/interruption, data disagreement, bad runtime grants,
+readiness and cleanup. Private-CA TLS and the actual administrative CLI are tested.
+The [runbook](recovery.md) distinguishes measured tiny-fixture drill durations
+from unapproved RPO/RTO and documents owner decisions for schedule, retention,
+encrypted/off-site storage, restore authorization, verification and responsibility.
+
+No tables, committed SQL, MCP contracts, authentication or authorization change.
+M8-G work remains separate. Milestone 8 remains incomplete; operational deployment
+commitments, production cutover, scheduling/retention automation, cluster-global
+recovery and WAL/PITR are not implemented or guaranteed by this slice.
 
 ---
 

@@ -6,3 +6,11 @@ coverage/
 .env.*
 !.env.example
 *.log
+
+# Logical backups contain all tenants' sensitive data; never commit them.
+backups/
+*.pgbackup/
+*.dump
+*.backup
+archive.partial
+manifest.partial

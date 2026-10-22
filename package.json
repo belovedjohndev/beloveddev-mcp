@@ -30,6 +30,7 @@
     "db:generate": "npm run build \u0026\u0026 drizzle-kit generate --config=packages/database/drizzle.config.ts",
     "db:check": "drizzle-kit check --config=packages/database/drizzle.config.ts",
     "db:migrate": "npm run build \u0026\u0026 node --env-file-if-exists=.env scripts/migrate.ts",
+    "db:recovery": "npm run build && node --env-file-if-exists=.env scripts/recovery.ts",
     "verify:all": "npm run verify \u0026\u0026 npm run db:check \u0026\u0026 npm run test:integration"
   },
   "devDependencies": {

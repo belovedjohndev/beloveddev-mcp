@@ -136,7 +136,7 @@ The image preserves the local-only authentication profile and rejects
 The gate builds from a source-only snapshot, checks for application listeners,
 and proves missing packaged migrations prevent readiness. Native Windows can
 continue using the [direct Node launcher](#direct-node-mcp-launcher).
-M8-G vulnerability maintenance and M8-H2 backup/recovery operations remain;
+M8-G vulnerability maintenance and deployment-specific recovery operations remain;
 Milestone 8 is not complete.
 
 ## Local stdio trust boundary
@@ -244,26 +244,28 @@ on Windows. Shutdown deadlines depend on the Node event loop being able to run.
 
 ## Commands
 
-| Command                    | Purpose                                                                      |
-| -------------------------- | ---------------------------------------------------------------------------- |
-| `npm ci`                   | Install the locked dependency tree, including local workspaces               |
-| `npm run build`            | Build active packages in dependency order with TypeScript                    |
-| `npm run typecheck`        | Build production code and check tests/configuration without emitting them    |
-| `npm run lint`             | Build package declarations, then run type-aware ESLint                       |
-| `npm run format:check`     | Check formatting of maintained foundation files                              |
-| `npm run format`           | Format maintained files                                                      |
-| `npm test`                 | Build and run Vitest, including compiled bootstrap tests                     |
-| `npm run test:watch`       | Build once, then watch tests                                                 |
-| `npm run verify`           | Check formatting, lint, types, build, and tests                              |
-| `npm run test:integration` | Run real PostgreSQL migration, constraint, and tenant-isolation tests        |
-| `npm run verify:all`       | Run all checks, including integration tests and migration history validation |
-| `npm run db:generate`      | Generate reviewed Drizzle SQL migrations and metadata                        |
-| `npm run db:check`         | Validate Drizzle migration history                                           |
-| `npm run db:migrate`       | Apply committed migrations using explicit DATABASE_MIGRATION_URL             |
-| `npm start`                | Terminal convenience only; MCP clients must use the direct Node launcher     |
-| `npm run db:up`            | Start PostgreSQL and wait for its health check                               |
-| `npm run db:down`          | Stop PostgreSQL, retaining the data volume                                   |
-| `npm run db:logs`          | Follow PostgreSQL logs                                                       |
+| Command                                                    | Purpose                                                                                 |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `npm ci`                                                   | Install the locked dependency tree, including local workspaces                          |
+| `npm run build`                                            | Build active packages in dependency order with TypeScript                               |
+| `npm run typecheck`                                        | Build production code and check tests/configuration without emitting them               |
+| `npm run lint`                                             | Build package declarations, then run type-aware ESLint                                  |
+| `npm run format:check`                                     | Check formatting of maintained foundation files                                         |
+| `npm run format`                                           | Format maintained files                                                                 |
+| `npm test`                                                 | Build and run Vitest, including compiled bootstrap tests                                |
+| `npm run test:watch`                                       | Build once, then watch tests                                                            |
+| `npm run verify`                                           | Check formatting, lint, types, build, and tests                                         |
+| `npm run test:integration`                                 | Run real PostgreSQL migration, constraint, and tenant-isolation tests                   |
+| `npm run verify:all`                                       | Run all checks, including integration tests and migration history validation            |
+| `npm run db:generate`                                      | Generate reviewed Drizzle SQL migrations and metadata                                   |
+| `npm run db:check`                                         | Validate Drizzle migration history                                                      |
+| `npm run db:migrate`                                       | Apply committed migrations using explicit DATABASE_MIGRATION_URL                        |
+| `npm run db:recovery -- backup /protected/unique.pgbackup` | Create and validate a PostgreSQL 18 custom backup using explicit recovery configuration |
+| `npm run db:recovery -- drill /protected/unique.pgbackup`  | Restore to a generated temporary database, verify data/readiness, and retire it         |
+| `npm start`                                                | Terminal convenience only; MCP clients must use the direct Node launcher                |
+| `npm run db:up`                                            | Start PostgreSQL and wait for its health check                                          |
+| `npm run db:down`                                          | Stop PostgreSQL, retaining the data volume                                              |
+| `npm run db:logs`                                          | Follow PostgreSQL logs                                                                  |
 
 The bootstrap tests execute compiled files. After changing application startup code
 during watch mode, rerun the build or restart the watcher. The default unit suite
@@ -349,8 +351,17 @@ documented in the [migration operations guide](docs/database.md#m8-h1-administra
 Failures return safe structured stderr categories and nonzero status; a lost
 commit response does not prove rollback. There are no automatic retries, ledger
 repairs, or startup migrations. Runtime M8-D readiness remains mandatory.
-Backup creation/verification, restore drills, and recovery objectives are M8-H2;
-M8-H and Milestone 8 remain incomplete.
+M8-H2 adds a separate [backup and recovery workflow](docs/recovery.md): explicit
+`DATABASE_BACKUP_URL` and `DATABASE_RESTORE_ADMIN_URL`, PostgreSQL 18 native tools,
+verified TLS, a consistent exported snapshot, private custom-format archive plus
+strict integrity manifest, and bounded isolated restore drills. Every table's
+data, the ledger, reviewed schema, and restricted runtime readiness are verified
+before success. Existing artifacts are never overwritten; no destination database
+name or production replacement is accepted. Credentials and tool paths belong in
+a protected recovery env file, outside MCP launchers. RPO/RTO, scheduling,
+retention, encrypted/off-site storage and production cutover remain explicit
+owner decisions; no operational guarantees are claimed. Milestone 8 remains
+incomplete.
 
 The example credentials are public and for isolated local development only.
 The official image creates `POSTGRES_USER` as a superuser. Use this local role for
@@ -412,12 +423,14 @@ transport policy and bounded schema/privilege readiness. M8-E bounds application
 admission, response time, and serialized success size. M8-F packages and verifies
 the local stdio release container. M8-H1 adds bounded, serialized administrative
 migrations with verified history and documented interrupted-operation recovery.
+M8-H2 adds tested logical backup and isolated restoration with complete data
+digests, restricted readiness and original note-key recovery.
 Further Milestone 8
 hardening remains unfinished; this slice is not a production-readiness claim.
 Known blockers include an approved production authentication profile, broader
 operational failure testing, request/input-limit review,
-release vulnerability review and update ownership, and M8-H2 backup creation,
-verification, restore drills, and recovery objectives.
+release vulnerability review and update ownership, and owner-approved recovery
+objectives, scheduling, retention, encrypted/off-site storage and cutover planning.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
 [PostgreSQL image initialization and storage](https://hub.docker.com/_/postgres),

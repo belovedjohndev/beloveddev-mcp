@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./recovery": {
+      "types": "./dist/recovery.d.ts",
+      "import": "./dist/recovery.js"
+    },
     "./readiness": {
       "types": "./dist/readiness.d.ts",
       "import": "./dist/readiness.js"
@@ -24,7 +28,8 @@
   "dependencies": {
     "@beloveddev/domain": "0.0.0",
     "drizzle-orm": "0.45.3",
-    "pg": "8.23.1"
+    "pg": "8.23.1",
+    "zod": "^4.2.0"
   },
   "devDependencies": {
     "@types/pg": "8.23.1",
