@@ -129,14 +129,27 @@ magic, file size, SHA-256, and PostgreSQL 18 archive listing. Every application
 TABLE and TABLE DATA entry and the drizzle schema/ledger must be represented.
 PostgreSQL 18 omits a separate public SCHEMA entry for the initdb-created schema;
 its required public TABLE entries identify that schema. A full pg_restore-to-SQL
-traversal/decompression is discarded without executing SQL, detecting damaged
-data blocks/truncated tails that a TOC-only check misses. All utility exit codes
-and stderr warnings are checked. No raw utility stderr is printed.
+traversal/decompression is discarded without executing SQL, detecting damaged or
+truncated required data blocks that a TOC-only check misses. This is not a
+canonical byte-format check: PostgreSQL can ignore trailing bytes that are not
+needed to restore the listed objects. All utility exit codes and stderr warnings
+are checked. No raw utility stderr is printed.
+
+The Linux CI truncation regression removed only the last 100 bytes, then rewrote
+the manifest size/digest. Linux PostgreSQL 18 stdout dumps reproduced a redundant
+trailing TOC rewrite: those bytes were ignored, extracted SQL was unchanged, and a
+verified restore preserved every row across all 12 expected tables, including all
+five migration ledger records. Windows dumps did not exhibit the same tail.
+The corruption regression now halves the fixture archive to damage required
+contents. Separate coverage checks that an ignored suffix still fails against
+the original manifest, while a consistent trusted fixture restores all rows and
+ledger records. Archive layout differences alone do not establish data loss.
 
 The manifest records completion status, archive digest/bytes, timestamp,
 backup-validation duration, reviewed schema digest, and per-table counts/digests.
-It contains no row content, passwords, or URLs. A checksum is not an authenticity
-signature: an attacker able to replace both archive and manifest can forge them.
+It contains no row content, passwords, or URLs. A checksum stored in a mutable
+manifest verifies consistency, not authenticity: an attacker able to rewrite both
+files can recompute the archive size/checksum and forge the manifest's contents.
 Only restore trusted backups from protected storage with trusted provenance.
 Retain the matching application build and exact committed migration artifacts:
 the verifier deliberately rejects a different reviewed schema/ledger version.

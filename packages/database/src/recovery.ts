@@ -216,7 +216,8 @@ async function inspectArchive(
       if (!toc.includes(` ${kind} ${schema} ${name} `)) throw new RecoveryError('ARTIFACT');
     }
   }
-  // Read and decompress every data block: a valid TOC alone misses truncated tails.
+  // Read/decompress required data blocks: a valid TOC alone misses payload damage.
+  // pg_restore may ignore trailing bytes; the manifest digest covers the whole file.
   await run('pg_restore', ['--no-owner', '--no-acl', '--file=-', path], 'discard');
 }
 

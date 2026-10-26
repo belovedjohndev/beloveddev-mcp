@@ -451,7 +451,10 @@ describe('PostgreSQL 18 backup and verified isolated recovery', () => {
       await cp(artifact, copy, { recursive: true });
       const path = join(copy, 'archive.dump');
       let bytes = await readFile(path);
-      if (mode === 'truncated') bytes = bytes.subarray(0, bytes.length - 100);
+      // Linux stdout dumps can end with a redundant TOC rewrite. Removing only
+      // 100 tail bytes can leave every required block intact; halve this fixture
+      // to truncate required TOC/data contents on both Linux and Windows.
+      if (mode === 'truncated') bytes = bytes.subarray(0, Math.floor(bytes.length / 2));
       else bytes.fill(0, Math.floor(bytes.length / 2), Math.floor(bytes.length / 2) + 100);
       await writeFile(path, bytes);
       const manifest = JSON.parse(await readFile(join(copy, 'manifest.json'), 'utf8')) as {
@@ -464,6 +467,39 @@ describe('PostgreSQL 18 backup and verified isolated recovery', () => {
       await expect(validateBackup(restoreConfig(), copy)).rejects.toBeInstanceOf(RecoveryError);
     },
   );
+
+  it('keeps byte integrity checks for ignored trailing data and restores every row and ledger', async () => {
+    const copy = join(directory, 'trailing-data.pgbackup');
+    await cp(artifact, copy, { recursive: true });
+    const path = join(copy, 'archive.dump');
+    const bytes = Buffer.concat([await readFile(path), Buffer.alloc(100, 0x7f)]);
+    await writeFile(path, bytes);
+    // PostgreSQL ignores this suffix, but the original manifest must reject it.
+    await expect(validateBackup(restoreConfig(), copy)).rejects.toMatchObject({
+      category: 'ARTIFACT',
+    });
+    const manifest = {
+      ...(await validateBackup(restoreConfig(), artifact)),
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+    };
+    await writeFile(join(copy, 'manifest.json'), JSON.stringify(manifest));
+    // A mutable checksum establishes consistency, not authenticity. Use only
+    // this suite's trusted fixture and verify all rows, including the ledger.
+    await expect(validateBackup(restoreConfig(), copy)).resolves.toEqual(manifest);
+    const changedSuffix = Buffer.from(bytes);
+    changedSuffix[changedSuffix.length - 1] = 0;
+    await writeFile(path, changedSuffix);
+    // The same-size ignored suffix must still be covered by SHA-256.
+    await expect(validateBackup(restoreConfig(), copy)).rejects.toMatchObject({
+      category: 'ARTIFACT',
+    });
+    await writeFile(path, bytes);
+    await withRestoredDatabase(restoreConfig(), copy, async (target) => {
+      expect(await data(target.admin)).toEqual(baseline);
+    });
+    expect(await data(source.admin)).toEqual(baseline);
+  }, 40_000);
 
   it('rejects incorrect credentials without exposing them', async () => {
     const url = new URL(source.migrationUrl);
