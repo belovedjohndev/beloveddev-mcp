@@ -1,31 +1,40 @@
-import { openDatabase } from '@beloveddev/database/client';
-import { migrateDatabase } from '@beloveddev/database/migrate';
 import {
-  EnvironmentValidationError,
-  parseEnvironment,
-} from '@beloveddev/infrastructure/environment';
+  migrateDatabase,
+  MigrationError,
+  MigrationConfigurationError,
+  parseMigrationEnvironment,
+} from '@beloveddev/database/migrate';
 import { createLogger } from '@beloveddev/infrastructure/logger';
 
 const logger = createLogger('info');
+const controller = new AbortController();
+const interrupt = () => controller.abort();
+process.on('SIGINT', interrupt);
+process.on('SIGTERM', interrupt);
+const started = performance.now();
 try {
-  const environment = parseEnvironment(process.env);
-  const connection = openDatabase(environment.DATABASE_URL, {
-    ...(environment.DATABASE_TLS_CA === undefined ? {} : { tlsCa: environment.DATABASE_TLS_CA }),
-    onIdleError: () => logger.error({ event: 'database.idle_error' }, 'Database connection failed'),
-  });
-  try {
-    await migrateDatabase(connection.db);
-    logger.info({ event: 'database.migrated' }, 'Database migrations applied');
-  } finally {
-    await connection.close();
-  }
+  await migrateDatabase(parseMigrationEnvironment(process.env), { signal: controller.signal });
+  logger.info(
+    { event: 'database.migrated', durationMs: Math.round(performance.now() - started) },
+    'Database migrations verified and administrative connection closed',
+  );
 } catch (error: unknown) {
   logger.error(
     {
       event: 'database.migration_failed',
-      invalidVariables: error instanceof EnvironmentValidationError ? error.fields : [],
+      category:
+        error instanceof MigrationConfigurationError
+          ? 'CONFIGURATION'
+          : error instanceof MigrationError
+            ? error.category
+            : 'INTERNAL',
+      outcome: 'unconfirmed',
+      durationMs: Math.round(performance.now() - started),
     },
     'Database migration failed; verify configuration, connectivity, and migration permissions',
   );
   process.exitCode = 1;
+} finally {
+  process.removeListener('SIGINT', interrupt);
+  process.removeListener('SIGTERM', interrupt);
 }

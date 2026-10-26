@@ -50,13 +50,13 @@ Run commands from the repository root.
    Keep the example administrator configuration in a separate protected file for
    migrations/tests; replace `.env` with a minimal runtime configuration containing
    the restricted `DATABASE_URL`, MCP settings, and log settings. Do not inject
-   `POSTGRES_PASSWORD` or `TEST_DATABASE_URL` into the server process. The example
+   `POSTGRES_PASSWORD`, `TEST_DATABASE_URL`, or `DATABASE_MIGRATION_*` into the server process. The example
    Compose superuser is now rejected by the server's startup gate.
 7. Launch the compiled server directly with Node using the instructions below:
    `node --env-file=.env apps/mcp-server/dist/main.js`.
 
 If port 5432 is already occupied, choose a free port in `POSTGRES_PORT` and
-update `DATABASE_URL` and `TEST_DATABASE_URL` to match before starting Compose.
+update `DATABASE_URL`, `DATABASE_MIGRATION_URL`, and `TEST_DATABASE_URL` to match before starting Compose.
 The [database guide](docs/database.md) includes a PowerShell workflow that asks
 Docker for an available host port.
 
@@ -136,7 +136,7 @@ The image preserves the local-only authentication profile and rejects
 The gate builds from a source-only snapshot, checks for application listeners,
 and proves missing packaged migrations prevent readiness. Native Windows can
 continue using the [direct Node launcher](#direct-node-mcp-launcher).
-M8-G vulnerability maintenance and M8-H backup/migration operations remain;
+M8-G vulnerability maintenance and deployment-specific recovery operations remain;
 Milestone 8 is not complete.
 
 ## Local stdio trust boundary
@@ -244,26 +244,28 @@ on Windows. Shutdown deadlines depend on the Node event loop being able to run.
 
 ## Commands
 
-| Command                    | Purpose                                                                      |
-| -------------------------- | ---------------------------------------------------------------------------- |
-| `npm ci`                   | Install the locked dependency tree, including local workspaces               |
-| `npm run build`            | Build active packages in dependency order with TypeScript                    |
-| `npm run typecheck`        | Build production code and check tests/configuration without emitting them    |
-| `npm run lint`             | Build package declarations, then run type-aware ESLint                       |
-| `npm run format:check`     | Check formatting of maintained foundation files                              |
-| `npm run format`           | Format maintained files                                                      |
-| `npm test`                 | Build and run Vitest, including compiled bootstrap tests                     |
-| `npm run test:watch`       | Build once, then watch tests                                                 |
-| `npm run verify`           | Check formatting, lint, types, build, and tests                              |
-| `npm run test:integration` | Run real PostgreSQL migration, constraint, and tenant-isolation tests        |
-| `npm run verify:all`       | Run all checks, including integration tests and migration history validation |
-| `npm run db:generate`      | Generate reviewed Drizzle SQL migrations and metadata                        |
-| `npm run db:check`         | Validate Drizzle migration history                                           |
-| `npm run db:migrate`       | Apply committed migrations using DATABASE_URL                                |
-| `npm start`                | Terminal convenience only; MCP clients must use the direct Node launcher     |
-| `npm run db:up`            | Start PostgreSQL and wait for its health check                               |
-| `npm run db:down`          | Stop PostgreSQL, retaining the data volume                                   |
-| `npm run db:logs`          | Follow PostgreSQL logs                                                       |
+| Command                                                    | Purpose                                                                                 |
+| ---------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `npm ci`                                                   | Install the locked dependency tree, including local workspaces                          |
+| `npm run build`                                            | Build active packages in dependency order with TypeScript                               |
+| `npm run typecheck`                                        | Build production code and check tests/configuration without emitting them               |
+| `npm run lint`                                             | Build package declarations, then run type-aware ESLint                                  |
+| `npm run format:check`                                     | Check formatting of maintained foundation files                                         |
+| `npm run format`                                           | Format maintained files                                                                 |
+| `npm test`                                                 | Build and run Vitest, including compiled bootstrap tests                                |
+| `npm run test:watch`                                       | Build once, then watch tests                                                            |
+| `npm run verify`                                           | Check formatting, lint, types, build, and tests                                         |
+| `npm run test:integration`                                 | Run real PostgreSQL migration, constraint, and tenant-isolation tests                   |
+| `npm run verify:all`                                       | Run all checks, including integration tests and migration history validation            |
+| `npm run db:generate`                                      | Generate reviewed Drizzle SQL migrations and metadata                                   |
+| `npm run db:check`                                         | Validate Drizzle migration history                                                      |
+| `npm run db:migrate`                                       | Apply committed migrations using explicit DATABASE_MIGRATION_URL                        |
+| `npm run db:recovery -- backup /protected/unique.pgbackup` | Create and validate a PostgreSQL 18 custom backup using explicit recovery configuration |
+| `npm run db:recovery -- drill /protected/unique.pgbackup`  | Restore to a generated temporary database, verify data/readiness, and retire it         |
+| `npm start`                                                | Terminal convenience only; MCP clients must use the direct Node launcher                |
+| `npm run db:up`                                            | Start PostgreSQL and wait for its health check                                          |
+| `npm run db:down`                                          | Stop PostgreSQL, retaining the data volume                                              |
+| `npm run db:logs`                                          | Follow PostgreSQL logs                                                                  |
 
 The bootstrap tests execute compiled files. After changing application startup code
 during watch mode, rerun the build or restart the watcher. The default unit suite
@@ -296,20 +298,22 @@ of Drizzle and concrete adapters.
 
 ## Configuration
 
-| Variable              | Default                        | Purpose                                                                    |
-| --------------------- | ------------------------------ | -------------------------------------------------------------------------- |
-| `NODE_ENV`            | `development`                  | `development`, `test`, or `production`                                     |
-| `LOG_LEVEL`           | `info`                         | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, or `silent`            |
-| `DATABASE_URL`        | Required                       | PostgreSQL URL with a host and database name                               |
-| `MCP_AUTH_MODE`       | Required                       | `local`; rejected in production pending an approved authentication profile |
-| `MCP_CURSOR_SECRET`   | Required                       | Cursor HMAC secret, 32–1024 characters                                     |
-| `MCP_LOCAL_TENANT_ID` | Optional                       | Trusted local operator tenant UUID; requires `MCP_LOCAL_USER_ID`           |
-| `MCP_LOCAL_USER_ID`   | Optional                       | Trusted local operator user UUID; requires `MCP_LOCAL_TENANT_ID`           |
-| `TEST_DATABASE_URL`   | Required for integration tests | Dedicated test-instance admin connection; never falls back to DATABASE_URL |
-| `POSTGRES_USER`       | Required by Compose            | Local database administrator                                               |
-| `POSTGRES_PASSWORD`   | Required by Compose            | Local database password                                                    |
-| `POSTGRES_DB`         | Required by Compose            | Local database name                                                        |
-| `POSTGRES_PORT`       | `5432`                         | Host port, bound to `127.0.0.1`                                            |
+| Variable                    | Default                        | Purpose                                                                    |
+| --------------------------- | ------------------------------ | -------------------------------------------------------------------------- |
+| `NODE_ENV`                  | `development`                  | `development`, `test`, or `production`                                     |
+| `LOG_LEVEL`                 | `info`                         | `fatal`, `error`, `warn`, `info`, `debug`, `trace`, or `silent`            |
+| `DATABASE_URL`              | Required                       | PostgreSQL URL with a host and database name                               |
+| `DATABASE_MIGRATION_URL`    | Required for migration CLI     | Separate administrative URL; no runtime/test fallback                      |
+| `DATABASE_MIGRATION_TLS_CA` | Optional for migration CLI     | Private CA PEM; requires verify-full; no runtime CA fallback               |
+| `MCP_AUTH_MODE`             | Required                       | `local`; rejected in production pending an approved authentication profile |
+| `MCP_CURSOR_SECRET`         | Required                       | Cursor HMAC secret, 32–1024 characters                                     |
+| `MCP_LOCAL_TENANT_ID`       | Optional                       | Trusted local operator tenant UUID; requires `MCP_LOCAL_USER_ID`           |
+| `MCP_LOCAL_USER_ID`         | Optional                       | Trusted local operator user UUID; requires `MCP_LOCAL_TENANT_ID`           |
+| `TEST_DATABASE_URL`         | Required for integration tests | Dedicated test-instance admin connection; never falls back to DATABASE_URL |
+| `POSTGRES_USER`             | Required by Compose            | Local database administrator                                               |
+| `POSTGRES_PASSWORD`         | Required by Compose            | Local database password                                                    |
+| `POSTGRES_DB`               | Required by Compose            | Local database name                                                        |
+| `POSTGRES_PORT`             | `5432`                         | Host port, bound to `127.0.0.1`                                            |
 
 `DATABASE_URL` validation checks URL structure, not connectivity. Both `postgres:`
 and `postgresql:` schemes are accepted. Keep the URL aligned with Compose settings;
@@ -333,6 +337,31 @@ Compose uses the official `postgres:18` image, a health check, localhost-only
 port publication, and a named volume mounted at `/var/lib/postgresql`. The major
 version is fixed; patch image updates are intentional. Apply the committed schema
 using `npm run db:migrate`; Compose itself does not apply migrations.
+
+M8-H1 migrations use an explicit administrative process, separate from runtime.
+After building, run `node --env-file=/protected/migrations.env scripts/migrate.ts`
+(PowerShell also accepts a quoted `C:/protected/migrations.env` path), or inject
+`DATABASE_MIGRATION_URL` and run `npm run db:migrate`. Remote endpoints require
+`sslmode=verify-full`; the optional private CA is `DATABASE_MIGRATION_TLS_CA`.
+One dedicated session holds a database-scoped advisory lock while Drizzle applies
+and verifies the original migration chain. Defaults: connect 5s, advisory wait 10s,
+other lock waits 5s, SQL 120s, overall 300s, cleanup at most 5s additional.
+Positive integer administrative timeout overrides and failure/recovery steps are
+documented in the [migration operations guide](docs/database.md#m8-h1-administrative-execution-policy).
+Failures return safe structured stderr categories and nonzero status; a lost
+commit response does not prove rollback. There are no automatic retries, ledger
+repairs, or startup migrations. Runtime M8-D readiness remains mandatory.
+M8-H2 adds a separate [backup and recovery workflow](docs/recovery.md): explicit
+`DATABASE_BACKUP_URL` and `DATABASE_RESTORE_ADMIN_URL`, PostgreSQL 18 native tools,
+verified TLS, a consistent exported snapshot, private custom-format archive plus
+strict integrity manifest, and bounded isolated restore drills. Every table's
+data, the ledger, reviewed schema, and restricted runtime readiness are verified
+before success. Existing artifacts are never overwritten; no destination database
+name or production replacement is accepted. Credentials and tool paths belong in
+a protected recovery env file, outside MCP launchers. RPO/RTO, scheduling,
+retention, encrypted/off-site storage and production cutover remain explicit
+owner decisions; no operational guarantees are claimed. Milestone 8 remains
+incomplete.
 
 The example credentials are public and for isolated local development only.
 The official image creates `POSTGRES_USER` as a superuser. Use this local role for
@@ -392,12 +421,16 @@ documented local trust boundary and protocol-safe launcher; M8-C bounds lifecycl
 cleanup and documents uncertain outcomes after disconnect. M8-D adds database
 transport policy and bounded schema/privilege readiness. M8-E bounds application
 admission, response time, and serialized success size. M8-F packages and verifies
-the local stdio release container. Further Milestone 8
+the local stdio release container. M8-H1 adds bounded, serialized administrative
+migrations with verified history and documented interrupted-operation recovery.
+M8-H2 adds tested logical backup and isolated restoration with complete data
+digests, restricted readiness and original note-key recovery.
+Further Milestone 8
 hardening remains unfinished; this slice is not a production-readiness claim.
 Known blockers include an approved production authentication profile, broader
 operational failure testing, request/input-limit review,
-release vulnerability review and update ownership, and a tested backup/recovery
-and migration deployment process.
+release vulnerability review and update ownership, and owner-approved recovery
+objectives, scheduling, retention, encrypted/off-site storage and cutover planning.
 
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
 [PostgreSQL image initialization and storage](https://hub.docker.com/_/postgres),

@@ -1,10 +1,49 @@
 # BelovedDev MCP V1 — Architecture
 
-## Implemented architecture through Milestone 8-F
+## Implemented architecture through Milestone 8-F and M8-H1/H2
 
 The stdio executable composes trusted local request context, application use
 cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
 logging. Database setup remains an explicit migration CLI action.
+
+M8-H2 adds operator-invoked recovery in `scripts/recovery.ts` and
+`packages/database/src/recovery{,-policy,-process}.ts`. Dedicated explicit backup
+and restore administrator configuration reuses M8-D URL/TLS enforcement. Native
+PostgreSQL 18 utilities run without a shell, secret argv, or ambient libpq overrides.
+An H1 shared lock and exported read-only snapshot bind custom-format backup bytes
+to deterministic per-table digests and the complete ledger/reviewed schema.
+Artifact publication is new-only with strict versioned Zod metadata and complete
+archive traversal. Restoration creates fresh owned disposable resources, runs
+strict transactional pg_restore, compares every table and ledger, reconstructs
+the existing narrow runtime grants, and runs unchanged M8-D readiness. Bounded
+callbacks support MCP/data verification; resources are retired with catalog
+identity checks on success/failure. There is no production replacement, new MCP
+tool, schema migration, authentication change, or startup recovery behavior.
+See [recovery operations](recovery.md) for credential/file trust, finite deadlines,
+uncertain outcomes, cleanup limits, and outstanding deployment-specific RPO/RTO,
+scheduling, retention, encryption, off-site storage and incident responsibilities.
+
+M8-H1 confines administrative migrations to `scripts/migrate.ts` and the database
+adapter. The CLI parses only dedicated `DATABASE_MIGRATION_*` settings; no runtime
+credential or CA fallback exists. A dedicated `pg.Client` owns the physical socket
+and database-scoped session advisory lock `(0x42444556, 1)`. Drizzle receives that
+same client, preserving its committed SQL, hashes, ledger, and transaction behavior.
+Exact ledger-prefix preflight and complete postflight reject history problems
+without repair. PostgreSQL enforces advisory/DDL lock and statement timeouts, with
+a remaining-budget transaction timeout; the process has an absolute operation
+deadline and bounded disconnect. Errors, signals, and connection loss fail closed
+with safe categories, no automatic retry, and no unproven rollback assertion.
+Connect/advisory/DDL-lock/statement/operation defaults are 5s/10s/5s/120s/300s,
+plus at most 5s cleanup. Runtime pools and M8-D policy are unchanged: startup never
+migrates or grants privileges and still verifies schema/ledger/effective grants.
+No domain, application, tenancy, authentication, or MCP contract changes occur.
+The [migration specification](m8-h1-migration-spec.md) records inspected Drizzle
+internals; [operations](database.md#m8-h1-administrative-execution-policy) cover
+credential/TLS policy, limits, diagnostics, and manual incident recovery.
+Advisory locking requires cooperating administrative executors and cannot prevent
+arbitrary privileged SQL. Backup creation/verification, restore drills, and recovery
+objectives are addressed separately in M8-H2; deployment decisions remain open.
+Milestone 8 is incomplete.
 
 M8-F adds a multi-stage Docker release for the same operator-controlled local
 stdio target. A digest-pinned Node 24 base and locked npm installs build the six
