@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   readAuditResult,
@@ -8,6 +11,7 @@ import {
   readInventory,
   sanitizeSecurityDiagnostic,
   securityFailureKind,
+  stageScannerInputs,
   validateGrypePolicy,
 } from '../../../scripts/security-check.js';
 
@@ -36,6 +40,102 @@ const audit = () => ({
 const configuredPolicy = (): unknown =>
   JSON.parse(readFileSync(new URL('../../../security/grype.json', import.meta.url), 'utf8'));
 const approvedPolicy = () => validateGrypePolicy(configuredPolicy());
+
+async function withScannerFixture(run: (directory: string) => Promise<void>) {
+  const directory = await mkdtemp(join(tmpdir(), 'beloveddev-scanner-test-'));
+  try {
+    await run(directory);
+  } finally {
+    expect(dirname(directory)).toBe(resolve(tmpdir()));
+    expect(basename(directory)).toMatch(/^beloveddev-scanner-test-/);
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+describe('explicit scanner input staging', () => {
+  it('copies only selected inputs to read-only file mounts without exposing private diagnostics', async () => {
+    await withScannerFixture(async (directory) => {
+      const source = join(directory, 'selected.sbom.json');
+      await writeFile(source, '{"artifacts":[]}');
+      await writeFile(join(directory, 'private.log'), 'private-diagnostic-sentinel');
+      const staging = await stageScannerInputs([{ source, target: '/work/selected.sbom.json' }]);
+      try {
+        expect(staging.files).toHaveLength(1);
+        const file = staging.files[0]!;
+        expect(await readFile(file.staged, 'utf8')).toBe(await readFile(source, 'utf8'));
+        expect(staging.mounts).toEqual([
+          '--mount',
+          'type=bind,source=' + file.staged + ',target=/work/selected.sbom.json,readonly',
+        ]);
+        expect(staging.mounts.join(' ')).not.toContain(directory);
+        expect(staging.mounts.join(' ')).not.toContain('private.log');
+        if (process.platform === 'linux')
+          expect((await stat(file.staged)).mode & 0o777).toBe(0o444);
+        await staging.verify();
+      } finally {
+        await staging.close();
+      }
+      await expect(stat(staging.files[0]!.staged)).rejects.toThrow();
+    });
+  });
+
+  it.each(['missing', 'empty', 'directory'])(
+    'rejects %s inputs before invoking a scanner',
+    async (kind) => {
+      await withScannerFixture(async (directory) => {
+        const source = join(directory, 'input');
+        if (kind === 'empty') await writeFile(source, '');
+        if (kind === 'directory') await mkdir(source);
+        await expect(stageScannerInputs([{ source, target: '/work/input.tar' }])).rejects.toThrow();
+      });
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')('rejects symlink inputs', async () => {
+    await withScannerFixture(async (directory) => {
+      await writeFile(join(directory, 'target'), 'unselected');
+      const source = join(directory, 'link');
+      await symlink(join(directory, 'target'), source);
+      await expect(stageScannerInputs([{ source, target: '/work/input.tar' }])).rejects.toThrow();
+    });
+  });
+
+  it.each([
+    '/work/../private.log',
+    '/work/input.tar,readonly=false',
+    '/work/credentials.env',
+    '/policy/toolchain.json',
+  ])('rejects unapproved mount target %s', async (target) => {
+    await withScannerFixture(async (directory) => {
+      const source = join(directory, 'source');
+      await writeFile(source, 'fixture');
+      await expect(stageScannerInputs([{ source, target }])).rejects.toThrow();
+    });
+  });
+
+  it('rejects duplicate input targets', async () => {
+    await withScannerFixture(async (directory) => {
+      const source = join(directory, 'source');
+      await writeFile(source, 'fixture');
+      const input = { source, target: '/work/input.tar' };
+      await expect(stageScannerInputs([input, input])).rejects.toThrow();
+    });
+  });
+
+  it('fails integrity verification if original evidence changes', async () => {
+    await withScannerFixture(async (directory) => {
+      const source = join(directory, 'source');
+      await writeFile(source, 'fixture');
+      const staging = await stageScannerInputs([{ source, target: '/work/input.tar' }]);
+      try {
+        await writeFile(source, 'changed');
+        await expect(staging.verify()).rejects.toThrow('Original scanner evidence changed');
+      } finally {
+        await staging.close();
+      }
+    });
+  });
+});
 
 describe('approved Grype configuration', () => {
   it('accepts the complete committed policy without dropping fields', () => {

@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { createReadStream } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -370,6 +382,73 @@ export function validateGrypePolicy(value: unknown) {
     .parse(value);
 }
 
+type ScannerInput = Readonly<{ source: string; target: string }>;
+
+async function fileDigest(path: string) {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) {
+    assert(Buffer.isBuffer(chunk));
+    hash.update(chunk);
+  }
+  return hash.digest('hex');
+}
+
+// Only individual approved files are mounted. A private host parent need not be
+// traversable by the scanner: Linux resolves the bind-mounted file at its target.
+export async function stageScannerInputs(inputs: readonly ScannerInput[]) {
+  const directory = await mkdtemp(join(tmpdir(), 'beloveddev-scanner-inputs-'));
+  const files: { source: string; target: string; staged: string; sha256: string }[] = [];
+  const close = async () => {
+    assert.equal(dirname(directory), resolve(tmpdir()));
+    assert(basename(directory).startsWith('beloveddev-scanner-inputs-'));
+    await rm(directory, { recursive: true, force: true });
+  };
+  try {
+    await chmod(directory, 0o700);
+    const targets = new Set<string>();
+    for (const input of inputs) {
+      assert(
+        /^\/(?:work\/[a-z0-9-]+\.(?:tar|sbom\.json)|policy\/grype\.json)$/.test(input.target),
+        'Unapproved scanner input target.',
+      );
+      assert(!targets.has(input.target), 'Duplicate scanner input target.');
+      targets.add(input.target);
+      const source = await lstat(input.source);
+      assert(
+        source.isFile() && source.size > 0,
+        'Scanner input must be a nonempty regular file, not a symlink.',
+      );
+      const staged = join(directory, String(files.length));
+      await copyFile(input.source, staged);
+      await chmod(staged, 0o444);
+      const sha256 = await fileDigest(input.source);
+      assert.equal(await fileDigest(staged), sha256, 'Scanner input copy must preserve evidence.');
+      files.push({ ...input, staged, sha256 });
+    }
+    return {
+      files,
+      mounts: files.flatMap((file) => [
+        '--mount',
+        'type=bind,source=' + file.staged + ',target=' + file.target + ',readonly',
+      ]),
+      verify: async () => {
+        for (const file of files) {
+          assert.equal(await fileDigest(file.staged), file.sha256, 'Staged scanner input changed.');
+          assert.equal(
+            await fileDigest(file.source),
+            file.sha256,
+            'Original scanner evidence changed.',
+          );
+        }
+      },
+      close,
+    };
+  } catch (error: unknown) {
+    await close();
+    throw error;
+  }
+}
+
 async function scannerContext() {
   const toolchain = toolchainSchema.parse(
     JSON.parse(await readFile(join(policyDirectory, 'toolchain.json'), 'utf8')),
@@ -391,6 +470,11 @@ async function scannerContext() {
         '--network=none',
         '--read-only',
         '--cap-drop=ALL',
+        '--security-opt=no-new-privileges',
+        '--user=1000:1000',
+        '--memory=2g',
+        '--cpus=2',
+        '--pids-limit=64',
         toolchain[tool],
         'version',
       ],
@@ -455,7 +539,8 @@ async function scannerContext() {
     await close();
     throw error;
   }
-  return { toolchain, volume, close };
+  assert(initializer);
+  return { toolchain, volume, close, initializer };
 }
 type ScannerContext = Awaited<ReturnType<typeof scannerContext>>;
 
@@ -472,9 +557,25 @@ async function scanner(
   offline = false,
   executable?: '/missing-security-scanner',
   timeout = 600_000,
+  inputs: readonly ScannerInput[] = [],
 ): Promise<CommandResult> {
   const name = `beloveddev_security_scan_${randomUUID().replaceAll('-', '')}`;
+  const staging = await stageScannerInputs([
+    ...inputs,
+    { source: join(policyDirectory, 'grype.json'), target: '/policy/grype.json' },
+  ]);
   try {
+    const policy = staging.files.find((file) => file.target === '/policy/grype.json');
+    assert(policy);
+    validateGrypePolicy(JSON.parse(await readFile(policy.staged, 'utf8')));
+    await writeFile(
+      join(reports, name + '.inputs.json'),
+      JSON.stringify(
+        staging.files.map(({ target, sha256 }) => ({ target, sha256 })),
+        null,
+        2,
+      ),
+    );
     return await run(
       'docker',
       [
@@ -495,10 +596,7 @@ async function scanner(
         '--env=XDG_CACHE_HOME=/tmp/.cache',
         ...(tool === 'syft' ? ['--env=SYFT_CHECK_FOR_APP_UPDATE=false'] : []),
         ...(offline || tool === 'syft' ? ['--network=none'] : []),
-        '--mount',
-        `type=bind,source=${reports},target=/work,readonly`,
-        '--mount',
-        `type=bind,source=${policyDirectory},target=/policy,readonly`,
+        ...staging.mounts,
         '--mount',
         `type=volume,source=${context.volume},target=/cache`,
         ...(executable === undefined ? [] : ['--entrypoint=' + executable]),
@@ -510,7 +608,15 @@ async function scanner(
     );
   } finally {
     // The --rm path can finish before this command. Ignore only a confirmed absent container.
-    await removeScannerContainer(name);
+    try {
+      await removeScannerContainer(name);
+    } finally {
+      try {
+        await staging.verify();
+      } finally {
+        await staging.close();
+      }
+    }
   }
 }
 
@@ -559,11 +665,15 @@ async function imageInventory(
     assert(archiveInput !== undefined && archiveInput.endsWith('.tar'));
     await copyFile(archiveInput, archive);
   }
-  const result = await scanner(context, 'syft', [
-    `docker-archive:/work/${prefix}.tar`,
-    '--output',
-    'syft-json',
-  ]);
+  const result = await scanner(
+    context,
+    'syft',
+    [`docker-archive:/work/${prefix}.tar`, '--output', 'syft-json'],
+    false,
+    undefined,
+    600_000,
+    [{ source: archive, target: '/work/' + prefix + '.tar' }],
+  );
   await writeFile(join(reports, `${prefix}.sbom.json`), result.stdout);
   await writeFile(join(reports, `${prefix}.inventory.log`), result.stderr);
   if (result.code !== 0)
@@ -617,7 +727,9 @@ const grypeArgs = (prefix: string) => [
 ];
 
 async function scanImage(context: ScannerContext, prefix: string) {
-  const result = await scanner(context, 'grype', grypeArgs(prefix));
+  const result = await scanner(context, 'grype', grypeArgs(prefix), false, undefined, 600_000, [
+    { source: join(reports, prefix + '.sbom.json'), target: '/work/' + prefix + '.sbom.json' },
+  ]);
   await writeFile(join(reports, `${prefix}.vulnerabilities.json`), result.stdout);
   await writeFile(join(reports, `${prefix}.exit.json`), JSON.stringify({ code: result.code }));
   await writeFile(join(reports, `${prefix}.scanner.log`), result.stderr);
@@ -651,6 +763,118 @@ async function prepareScannerDatabase(context: ScannerContext) {
   ]);
   await writeFile(join(reports, 'database-status.json'), status.stdout);
   assert.equal(status.code, 0, 'A valid scanner database is required.');
+}
+
+async function scannerAccessProof(context: ScannerContext) {
+  phase = 'scanner input access enforcement';
+  const input = join(reports, 'access-proof.sbom.json');
+  const privateReport = join(reports, 'access-proof.private');
+  await writeFile(input, JSON.stringify({ fixture: 'selected-public-input' }));
+  await writeFile(privateReport, 'private-report-sentinel', { mode: 0o600 });
+  if (process.platform === 'linux') assert.equal((await stat(reports)).mode & 0o777, 0o700);
+  await assert.rejects(
+    stageScannerInputs([
+      { source: join(reports, 'missing.sbom.json'), target: '/work/missing.sbom.json' },
+    ]),
+  );
+  const staging = await stageScannerInputs([
+    { source: input, target: '/work/access-proof.sbom.json' },
+  ]);
+  const name = 'beloveddev_security_scan_' + randomUUID().replaceAll('-', '');
+  try {
+    const script =
+      "import assert from 'node:assert/strict';\nimport {readFileSync,writeFileSync,chmodSync,unlinkSync,statSync} from 'node:fs';\nassert.equal(process.getuid(),1000);assert.equal(process.getgid(),1000);\nconst input='/work/access-proof.sbom.json';\nassert.equal(statSync(input).mode & 0o777,0o444);\nassert.equal(JSON.parse(readFileSync(input,'utf8')).fixture,'selected-public-input');\nfor(const mutate of [()=>writeFileSync(input,'changed'),()=>chmodSync(input,0o644),()=>unlinkSync(input)])assert.throws(mutate,error=>['EROFS','EACCES','EPERM','EBUSY'].includes(error.code));\nfor(const path of ['/work/access-proof.private','/work/command-1.json','/policy/toolchain.json'])assert.throws(()=>readFileSync(path),error=>error.code==='ENOENT');\nprocess.stdout.write(JSON.stringify({uid:process.getuid(),gid:process.getgid(),inputMode:statSync(input).mode & 0o777,inputReadable:true,inputWritesRejected:true,privateReportsUnavailable:true}));";
+    await docker([
+      'create',
+      '--name',
+      name,
+      '--read-only',
+      '--network=none',
+      '--cap-drop=ALL',
+      '--security-opt=no-new-privileges',
+      '--user=1000:1000',
+      '--memory=2g',
+      '--cpus=2',
+      '--pids-limit=64',
+      ...staging.mounts,
+      '--entrypoint=node',
+      context.initializer,
+      '--input-type=module',
+      '-e',
+      script,
+    ]);
+    const [inspection] = z
+      .tuple([
+        z.object({
+          Config: z.object({ User: z.literal('1000:1000') }),
+          HostConfig: z.object({
+            ReadonlyRootfs: z.literal(true),
+            NetworkMode: z.literal('none'),
+            CapDrop: z.array(z.string()),
+            SecurityOpt: z.array(z.string()),
+            Memory: z.literal(2 * 1024 ** 3),
+            NanoCpus: z.literal(2_000_000_000),
+            PidsLimit: z.literal(64),
+          }),
+          Mounts: z.tuple([
+            z.object({ Destination: z.string(), Source: z.string(), RW: z.literal(false) }),
+          ]),
+        }),
+      ])
+      .parse(JSON.parse(await docker(['inspect', name])));
+    assert.equal(inspection.Config.User, '1000:1000');
+    assert.equal(inspection.HostConfig.ReadonlyRootfs, true);
+    assert.equal(inspection.HostConfig.NetworkMode, 'none');
+    assert.deepEqual(inspection.HostConfig.CapDrop, ['ALL']);
+    assert(inspection.HostConfig.SecurityOpt.includes('no-new-privileges'));
+    assert.equal(inspection.Mounts.length, 1);
+    assert.equal(inspection.Mounts[0].Destination, '/work/access-proof.sbom.json');
+    assert.equal(inspection.Mounts[0].RW, false);
+    assert.equal(inspection.Mounts[0].Source, staging.files[0]?.staged);
+    const result = z
+      .strictObject({
+        uid: z.literal(1000),
+        gid: z.literal(1000),
+        inputMode: z.literal(0o444),
+        inputReadable: z.literal(true),
+        inputWritesRejected: z.literal(true),
+        privateReportsUnavailable: z.literal(true),
+      })
+      .parse(JSON.parse(await docker(['start', '--attach', name])));
+    const exit = await docker(['inspect', name, '--format', '{{.State.ExitCode}}']);
+    assert.equal(exit, '0');
+    await staging.verify();
+    await writeFile(
+      join(reports, 'scanner-access-proof.json'),
+      JSON.stringify(
+        {
+          host: {
+            platform: process.platform,
+            reportMode: (await stat(reports)).mode & 0o777,
+            stagingParentMode: (await stat(dirname(staging.files[0]!.staged))).mode & 0o777,
+          },
+          container: {
+            user: inspection.Config.User,
+            readOnlyRoot: inspection.HostConfig.ReadonlyRootfs,
+            mounts: inspection.Mounts.map((mount) => ({
+              target: mount.Destination,
+              writable: mount.RW,
+            })),
+          },
+          missingInputRejected: true,
+          ...result,
+        },
+        null,
+        2,
+      ),
+    );
+  } finally {
+    try {
+      await removeScannerContainer(name);
+    } finally {
+      await staging.close();
+    }
+  }
 }
 
 async function policyProof() {
@@ -765,6 +989,7 @@ async function policyProof() {
     builtImages.push(fixtureTag);
     phase = 'scanner provisioning';
     context = await scannerContext();
+    await scannerAccessProof(context);
     phase = 'missing scanner executable enforcement';
     const missingExecutable = await scanner(
       context,
@@ -860,6 +1085,14 @@ async function policyProof() {
       'grype',
       grypeArgs('vulnerable-installed-npm'),
       true,
+      undefined,
+      600_000,
+      [
+        {
+          source: join(reports, 'vulnerable-installed-npm.sbom.json'),
+          target: '/work/vulnerable-installed-npm.sbom.json',
+        },
+      ],
     );
     assert(/failed to load vulnerability db/i.test(unavailableDb.stderr));
     assert.notEqual(
@@ -870,7 +1103,15 @@ async function policyProof() {
     assert.throws(() => readImageResult(JSON.parse(unavailableDb.stdout), unavailableDb.code));
     phase = 'malformed scanner input enforcement';
     await writeFile(join(reports, 'invalid.sbom.json'), '{invalid');
-    const invalid = await scanner(context, 'grype', grypeArgs('invalid'));
+    const invalid = await scanner(
+      context,
+      'grype',
+      grypeArgs('invalid'),
+      false,
+      undefined,
+      600_000,
+      [{ source: join(reports, 'invalid.sbom.json'), target: '/work/invalid.sbom.json' }],
+    );
     assert.notEqual(invalid.code, 0);
     assert(
       /invalid character|invalid.*(?:JSON|SBOM)|unable to decode|unable to parse/i.test(
@@ -883,6 +1124,7 @@ async function policyProof() {
       JSON.stringify(
         {
           scannerVersionsVerified: true,
+          scannerInputAccessVerified: true,
           missingScannerExecutableRejected: true,
           invalidImageRejected: true,
           cleanInstalledNpmScanPassed: true,

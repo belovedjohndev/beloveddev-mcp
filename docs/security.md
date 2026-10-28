@@ -91,6 +91,26 @@ payloads; this is not a universal arbitrary-content sanitizer. Never commit gene
 reports, archives, env files, backups or review ZIPs. CI retains available JSON
 artifacts for seven days, not image archives, fixtures or raw diagnostic logs.
 
+Report directories remain mode 0700 and are never mounted into scanners. Each
+invocation selects only its image archive or SBOM and the strictly validated
+Grype policy. Copies live under an invocation-owned private temporary directory;
+individual mode-0444 files are bind-mounted read-only at fixed approved targets.
+The Linux container traverses its own target directories, not the private host
+parent. No directory mount exposes diagnostic siblings or other policy files.
+SHA-256 checks bind each copy to original evidence before and after scanning;
+missing, empty, nonregular, symlink and unapproved/duplicate-target inputs fail
+closed. Temporary copies are removed after scanner cleanup, including failures.
+Only public build/package metadata belongs in scanner inputs: runtime secrets
+must never be baked into images or supplied to this path. This is not a secret
+scrubber for arbitrary images.
+
+security:verify checks private host permissions on Linux and uses a real bounded,
+network-isolated UID/GID 1000:1000 container to verify selected-file reads,
+write/chmod/unlink rejection, read-only mount configuration and absence of private
+reports. The real Syft/Grype installed-package fixtures then prove cataloging and
+policy enforcement with the same per-file mounts. Windows filesystem modes do
+not substitute for this native Linux check.
+
 Scanner containers are nonroot, read-only, capability-free, memory/CPU/PID bounded,
 and use an invocation-owned cache volume. Scanner processes have two CPUs and
 2 GiB memory. Database provisioning has a separate twenty-minute deadline;
