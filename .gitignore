@@ -14,3 +14,6 @@ backups/
 *.backup
 archive.partial
 manifest.partial
+
+# Generated security inventories and scanner evidence.
+.security-reports/

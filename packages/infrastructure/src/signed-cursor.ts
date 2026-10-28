@@ -3,6 +3,7 @@ import type { CursorCodec, PageCursor } from '@beloveddev/application/pagination
 import { ApplicationError } from '@beloveddev/application/application-error';
 import { blockerSeverities, projectStatuses } from '@beloveddev/domain/entities';
 import { z } from 'zod';
+import { isValidCursorSecret } from './signing-secret.js';
 
 const cursorSchema = z.discriminatedUnion('kind', [
   z.strictObject({
@@ -54,8 +55,7 @@ const cursorSchema = z.discriminatedUnion('kind', [
 
 export class SignedCursorCodec implements CursorCodec {
   constructor(private readonly secret: string) {
-    if (Buffer.byteLength(secret, 'utf8') < 32)
-      throw new Error('Cursor signing key must contain at least 32 bytes.');
+    if (!isValidCursorSecret(secret)) throw new Error('Cursor signing key is invalid.');
   }
   encode(cursor: PageCursor): string {
     const payload = Buffer.from(JSON.stringify(cursorSchema.parse(cursor)), 'utf8').toString(

@@ -11,7 +11,7 @@ credentials are not isolated by RLS.
 
 Use a Linux Docker engine with Buildx/BuildKit, Node `>=24.12.0 <25`, and npm
 `>=11 <12` on the build/test host. The image pins the official Debian bookworm
-slim Node 24 base by digest, currently containing Node 24.22.0 and npm 11.19.1.
+slim Node 24 base by digest, currently containing Node 24.22.1 and npm 11.19.1.
 npm is used only in build stages and removed from the runtime stage.
 
 ```sh

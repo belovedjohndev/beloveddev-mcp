@@ -85,7 +85,11 @@ describe('invocation limits with real PostgreSQL transactions', () => {
     const server = createMcpServer({
       useCases,
       context,
-      logger: { info: (record) => logs.push(record) },
+      logger: {
+        info: (record) => logs.push(record),
+        warn: (record) => logs.push(record),
+        error: (record) => logs.push(record),
+      },
       ...(admission === undefined ? {} : { admission }),
     });
     const client = new Client({ name: 'database-invocation-limits', version: '1' });

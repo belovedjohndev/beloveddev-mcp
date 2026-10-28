@@ -1,6 +1,6 @@
 # Immutable official Node 24 base; update the digest deliberately and rerun the smoke test.
 ARG SOURCE_DATE_EPOCH=0
-FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS manifests
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS manifests
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/mcp-server/package.json apps/mcp-server/package.json
@@ -28,7 +28,7 @@ FROM manifests AS production-dependencies
 RUN npm ci --engine-strict --omit=dev --workspace=@beloveddev/mcp-server --include-workspace-root=false --ignore-scripts --no-audit --no-fund \
     && rm node_modules/@beloveddev/test-support
 
-FROM node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 AS release
+FROM node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS release
 WORKDIR /app
 # No npm/Yarn, install hooks, project sources, test fixtures, or build toolchain at runtime.
 RUN rm -rf /usr/local/lib/node_modules/npm /opt/yarn* \

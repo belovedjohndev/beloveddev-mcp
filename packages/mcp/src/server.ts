@@ -34,6 +34,14 @@ export interface McpUseCases {
   readonly evaluateOpportunity: Pick<EvaluateOpportunity, 'execute'>;
   readonly createProjectNote: Pick<CreateProjectNote, 'execute'>;
 }
+export type InvocationFailureKind =
+  | 'admission'
+  | 'context_resolution'
+  | 'execution'
+  | 'output_validation'
+  | 'response_size'
+  | 'deadline';
+
 export interface InvocationLog {
   readonly event: 'mcp.invocation';
   readonly requestId: string;
@@ -43,9 +51,12 @@ export interface InvocationLog {
   readonly durationMs: number;
   readonly resultStatus: 'success' | 'error';
   readonly errorCategory?: ApplicationErrorCode;
+  readonly failureKind?: InvocationFailureKind;
 }
 export interface InvocationLogger {
   info(record: InvocationLog): void;
+  warn(record: InvocationLog): void;
+  error(record: InvocationLog): void;
 }
 
 export function createMcpServer(dependencies: {
@@ -72,6 +83,8 @@ export function createMcpServer(dependencies: {
     const started = performance.now();
     const state: { context: RequestContext | null } = { context: null };
     let errorCategory: ApplicationErrorCode | undefined;
+    let phase: InvocationFailureKind = 'admission';
+    let failureKind: InvocationFailureKind | undefined;
     let release: (() => void) | undefined;
     let executing = false;
     let responseFinished = false;
@@ -88,6 +101,7 @@ export function createMcpServer(dependencies: {
     };
     try {
       release = admission.enter();
+      phase = 'context_resolution';
       const deadline = new Promise<never>((_resolve, reject) => {
         timer = setTimeout(() => {
           expired = true;
@@ -100,7 +114,9 @@ export function createMcpServer(dependencies: {
         state.context = context;
         // An expired context lookup must not initiate a new application operation.
         checkDeadline();
+        phase = 'execution';
         const result = await operation(context);
+        phase = 'output_validation';
         if (typeof result !== 'object' || result === null || Array.isArray(result)) {
           throw new ApplicationError('INTERNAL_ERROR');
         }
@@ -112,6 +128,7 @@ export function createMcpServer(dependencies: {
         };
         // Count UTF-8 bytes of both success representations, including JSON escaping.
         // The SDK-owned JSON-RPC framing is outside the application response limit.
+        phase = 'response_size';
         if (Buffer.byteLength(JSON.stringify(response), 'utf8') > MAX_SUCCESS_RESPONSE_BYTES) {
           throw new ApplicationError('INTERNAL_ERROR');
         }
@@ -130,6 +147,9 @@ export function createMcpServer(dependencies: {
         (expired || performance.now() - started >= APPLICATION_RESPONSE_DEADLINE_MS);
       const safe = overdue ? new ApplicationError('INTERNAL_ERROR') : toApplicationError(error);
       errorCategory = safe.code;
+      if (safe.code === 'INTERNAL_ERROR' || safe.code === 'RATE_LIMITED') {
+        failureKind = overdue ? 'deadline' : phase;
+      }
       const payload = safeErrorSchema.parse({
         error: { code: safe.code, message: safe.message, requestId },
       });
@@ -140,7 +160,13 @@ export function createMcpServer(dependencies: {
     } finally {
       clearTimeout(timer);
       try {
-        dependencies.logger.info({
+        const level =
+          errorCategory === undefined
+            ? 'info'
+            : errorCategory === 'INTERNAL_ERROR'
+              ? 'error'
+              : 'warn';
+        dependencies.logger[level]({
           event: 'mcp.invocation',
           requestId,
           toolName: name,
@@ -149,7 +175,11 @@ export function createMcpServer(dependencies: {
           durationMs: Math.max(0, performance.now() - started),
           resultStatus: errorCategory === undefined ? 'success' : 'error',
           ...(errorCategory === undefined ? {} : { errorCategory }),
+          ...(failureKind === undefined ? {} : { failureKind }),
         });
+      } catch {
+        // An unavailable diagnostic sink cannot replace a result (possibly a
+        // committed write), strand capacity, or fall back to protocol stdout.
       } finally {
         responseFinished = true;
         releaseWhenFinished();

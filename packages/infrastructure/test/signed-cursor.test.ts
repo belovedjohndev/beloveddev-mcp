@@ -92,8 +92,6 @@ describe('signed cursor integrity', () => {
     expect(() => codec.decode(sign(value))).toThrow('The input is invalid.');
   });
   it('rejects an undersized signing key without echoing it', () => {
-    expect(() => new SignedCursorCodec('private-short')).toThrow(
-      'Cursor signing key must contain at least 32 bytes.',
-    );
+    expect(() => new SignedCursorCodec('private-short')).toThrow('Cursor signing key is invalid.');
   });
 });

@@ -6,6 +6,14 @@ The stdio executable composes trusted local request context, application use
 cases, PostgreSQL repositories, signed cursors, MCP handlers, and structured
 logging. Database setup remains an explicit migration CLI action.
 
+M8-G reconciliation adds external dependency/image gates and narrowly scoped
+logging, redaction and cursor-key checks; see [security policy](security.md) and
+the [dated reconciliation review](m8-g-security-review.md). Live scanner enforcement passes and the patched official Bookworm release
+passes packaged compatibility/reproducibility checks. Current image vulnerabilities
+still block release. No experimental image is promoted, and this is not production
+approval. M8-H1/H2 implementations,
+credentials, locks, snapshot/restore behavior and cleanup remain unchanged.
+
 M8-H2 adds operator-invoked recovery in `scripts/recovery.ts` and
 `packages/database/src/recovery{,-policy,-process}.ts`. Dedicated explicit backup
 and restore administrator configuration reuses M8-D URL/TLS enforcement. Native

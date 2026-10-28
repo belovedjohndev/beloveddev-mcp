@@ -1,0 +1,69 @@
+# Experimental distroless candidate; Dockerfile remains the runtime-verified Bookworm baseline.
+# Immutable official Node 24 base; update the digest deliberately and rerun the smoke test.
+ARG SOURCE_DATE_EPOCH=0
+FROM node:24-trixie-slim@sha256:43b9ba1142b8dcf33fa8f922ca1be85714adc444e0586c7cf7726daaeabc1bea AS manifests
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY apps/mcp-server/package.json apps/mcp-server/package.json
+COPY packages/domain/package.json packages/domain/package.json
+COPY packages/application/package.json packages/application/package.json
+COPY packages/database/package.json packages/database/package.json
+COPY packages/infrastructure/package.json packages/infrastructure/package.json
+COPY packages/mcp/package.json packages/mcp/package.json
+COPY packages/shared/package.json packages/shared/package.json
+COPY packages/test-support/package.json packages/test-support/package.json
+
+FROM manifests AS build
+RUN npm ci --engine-strict --ignore-scripts --no-audit --no-fund
+COPY tsconfig.base.json ./
+COPY apps/mcp-server/ apps/mcp-server/
+COPY packages/domain/ packages/domain/
+COPY packages/application/ packages/application/
+COPY packages/database/ packages/database/
+COPY packages/infrastructure/ packages/infrastructure/
+COPY packages/mcp/ packages/mcp/
+RUN npm exec -- tsc -b apps/mcp-server
+
+FROM manifests AS production-dependencies
+# npm retains this dev-only workspace link even with --omit=dev.
+RUN npm ci --engine-strict --omit=dev --workspace=@beloveddev/mcp-server --include-workspace-root=false --ignore-scripts --no-audit --no-fund \
+    && rm node_modules/@beloveddev/test-support
+
+# Normalize only release manifests and original migration assets, not dependencies or code.
+FROM build AS runtime-artifacts
+RUN chmod 0644 /app/package.json \
+    /app/apps/mcp-server/package.json \
+    /app/packages/domain/package.json \
+    /app/packages/application/package.json \
+    /app/packages/database/package.json \
+    /app/packages/infrastructure/package.json \
+    /app/packages/mcp/package.json \
+    /app/packages/database/migrations/*.sql \
+    /app/packages/database/migrations/meta/*.json \
+    && chmod 0755 /app/packages/database/migrations /app/packages/database/migrations/meta
+
+FROM gcr.io/distroless/nodejs24-debian13:nonroot@sha256:cb606325b7ec4af55462cb0b424a53b452a5b4a894ffe841fcf1048d216fb9f8 AS release
+# Create the application root as root; final execution remains nonroot.
+USER 0:0
+WORKDIR /app
+# Distroless has no shell, npm or package manager. No RUN steps in this stage.
+COPY --from=production-dependencies /app/node_modules ./node_modules
+COPY --from=runtime-artifacts /app/package.json ./package.json
+COPY --from=runtime-artifacts /app/apps/mcp-server/package.json ./apps/mcp-server/package.json
+COPY --from=runtime-artifacts /app/packages/domain/package.json ./packages/domain/package.json
+COPY --from=runtime-artifacts /app/packages/application/package.json ./packages/application/package.json
+COPY --from=runtime-artifacts /app/packages/database/package.json ./packages/database/package.json
+COPY --from=runtime-artifacts /app/packages/infrastructure/package.json ./packages/infrastructure/package.json
+COPY --from=runtime-artifacts /app/packages/mcp/package.json ./packages/mcp/package.json
+COPY --from=build /app/apps/mcp-server/dist ./apps/mcp-server/dist
+COPY --from=build /app/packages/domain/dist ./packages/domain/dist
+COPY --from=build /app/packages/application/dist ./packages/application/dist
+COPY --from=build /app/packages/database/dist ./packages/database/dist
+COPY --from=build /app/packages/infrastructure/dist ./packages/infrastructure/dist
+COPY --from=build /app/packages/mcp/dist ./packages/mcp/dist
+# Readiness hashes the original migration SQL and reads meta/_journal.json.
+COPY --from=runtime-artifacts /app/packages/database/migrations ./packages/database/migrations
+USER 65532:65532
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/nodejs/bin/node"]
+CMD ["/app/apps/mcp-server/dist/main.js"]

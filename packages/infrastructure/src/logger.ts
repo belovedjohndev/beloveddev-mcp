@@ -14,6 +14,13 @@ const sensitiveKeys = [
   'databaseUrl',
   'MCP_CURSOR_SECRET',
   'cursorSecret',
+  'err',
+  'error',
+  'cause',
+  'stack',
+  'sql',
+  'parameters',
+  'detail',
 ];
 
 export function createLogger(level: LogLevel, destination?: DestinationStream): Logger {

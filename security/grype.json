@@ -1,0 +1,20 @@
+{
+  "check-for-app-update": false,
+  "fail-on-severity": "high",
+  "only-fixed": false,
+  "only-notfixed": false,
+  "ignore": [],
+  "exclude": [],
+  "vex-documents": [],
+  "db": {
+    "cache-dir": "/cache",
+    "auto-update": true,
+    "validate-by-hash-on-start": true,
+    "validate-age": true,
+    "max-allowed-built-age": "120h",
+    "require-update-check": true,
+    "max-update-check-frequency": "0s",
+    "update-available-timeout": "30s",
+    "update-download-timeout": "5m"
+  }
+}

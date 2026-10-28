@@ -104,7 +104,12 @@ describe('MCP environment validation', () => {
     MCP_CURSOR_SECRET: 'private-cursor-key-at-least-32-characters',
   };
   it.each([32, 1024])('accepts the schema secret length boundary %s', (length) => {
-    const result = parseMcpEnvironment({ ...valid, MCP_CURSOR_SECRET: 'x'.repeat(length) });
+    const key = Array.from({ length: 16 }, (_, index) =>
+      createHash('sha512').update(String(index)).digest('hex'),
+    )
+      .join('')
+      .slice(0, length);
+    const result = parseMcpEnvironment({ ...valid, MCP_CURSOR_SECRET: key });
     expect(Object.isFrozen(result)).toBe(true);
     expect(result.MCP_LOCAL_TENANT_ID).toBeUndefined();
     expect(result.MCP_LOCAL_USER_ID).toBeUndefined();
@@ -141,3 +146,4 @@ describe('MCP environment validation', () => {
     expect(parseMcpEnvironment({ ...valid, ...identity })).toMatchObject(identity);
   });
 });
+import { createHash } from 'node:crypto';
