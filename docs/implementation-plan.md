@@ -761,6 +761,25 @@ authentication approval. These follow-up slices are not implemented here.
 
 ---
 
+### Milestone 8-G ? Security reconciliation (blocked)
+
+The 2026-10-26 reconciliation uses a separate worktree on merged main and
+preserves original M8-G/M8-H recovery references. Reviewed logging severity, safe
+diagnostics, cursor-key checks, CI pins and fail-closed audit/scanner gates are
+ported. Compatible Zod 4.6.6 and Vite 8.3.3 patches clear production and full-tree
+npm auditing. Scanner versions, database provisioning, safe stage diagnostics and
+real A?F failure/clean/vulnerable proofs are verified. Full installed-image SBOMs
+and current Grype reports exist for the original and patched Bookworm releases.
+The patched release passes packaged compatibility and identical cold rebuild
+checks, but its remaining High/Critical findings still fail the unchanged gate.
+A separate official Trixie candidate is assessed without promoting it. Historical
+distroless counts do not substitute for current evidence. Do not accept M8-G,
+approve an exception or claim production readiness while blocking findings remain.
+See [reconciliation specification](m8-g-reconciliation-spec.md),
+[dated review](m8-g-security-review.md) and [security operations](security.md).
+M8-H1/H2 code and migration bytes remain unchanged; no automatic mutation retry,
+new tool, authentication mode or schema change is added.
+
 ### Milestone 8-H1 — Safe serialized migrations (implemented)
 
 The administrative CLI requires `DATABASE_MIGRATION_URL` and optional private CA

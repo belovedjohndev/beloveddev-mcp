@@ -67,7 +67,7 @@
   },
   "dependencies": {
     "@beloveddev/domain": "0.0.0",
-    "zod": "^4.2.0"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@beloveddev/test-support": "0.0.0"

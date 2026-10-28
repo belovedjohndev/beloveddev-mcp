@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isValidCursorSecret } from './signing-secret.js';
 
 const logLevelSchema = z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']);
 const databaseUrlSchema = z.string().refine((value) => {
@@ -55,7 +56,7 @@ const mcpEnvironmentSchema = environmentSchema
     MCP_AUTH_MODE: z.literal('local'),
     MCP_LOCAL_TENANT_ID: z.uuid().optional(),
     MCP_LOCAL_USER_ID: z.uuid().optional(),
-    MCP_CURSOR_SECRET: z.string().min(32).max(1024),
+    MCP_CURSOR_SECRET: z.string().refine(isValidCursorSecret, 'Invalid cursor signing key.'),
   })
   .superRefine((value, context) => {
     if (value.NODE_ENV === 'production') {

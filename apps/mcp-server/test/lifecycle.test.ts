@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createLogger } from '@beloveddev/infrastructure/logger';
 import { DRAIN_TIMEOUT_MS, SHUTDOWN_TIMEOUT_MS, StdioLifecycle } from '../src/lifecycle.js';
 
 function deferred() {
@@ -29,6 +30,27 @@ function fixture() {
 describe('bounded stdio lifecycle', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+
+  it.each(['idle', 'client'] as const)(
+    'keeps fatal %s database errors visible at LOG_LEVEL=warn',
+    async (source) => {
+      const { options } = fixture();
+      const lines: string[] = [];
+      const logger = createLogger('warn', {
+        write: (line) => {
+          lines.push(line);
+        },
+      });
+      const lifecycle = new StdioLifecycle({ ...options, logger });
+      await lifecycle.databaseError(source);
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] ?? '') as unknown).toMatchObject({
+        level: 50,
+        event: source === 'idle' ? 'database.idle_error' : 'database.client_error',
+      });
+      expect(options.terminate).toHaveBeenCalledExactlyOnceWith(1);
+    },
+  );
 
   it.each(['SIGINT', 'SIGTERM', 'transport_closed', 'database_error', 'startup_error'] as const)(
     'uses the same idempotent cleanup path for %s',

@@ -29,9 +29,10 @@ import type {
 } from '@beloveddev/application/repositories';
 import type { Opportunity } from '@beloveddev/domain/entities';
 import { SignedCursorCodec } from '@beloveddev/infrastructure/signed-cursor';
+import { createLogger } from '@beloveddev/infrastructure/logger';
 import { createReadFixture, fixtureId } from '@beloveddev/test-support/read-fixtures';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMcpServer, type InvocationLog } from '../src/server.js';
+import { createMcpServer, type InvocationLog, type InvocationLogger } from '../src/server.js';
 import { safeErrorSchema, toolSchemas } from '../src/schemas.js';
 import {
   APPLICATION_RESPONSE_DEADLINE_MS,
@@ -68,6 +69,7 @@ describe('MCP SDK and application contracts', () => {
   let server: ReturnType<typeof createMcpServer>;
   let client: Client;
   let logs: InvocationLog[];
+  let logger: InvocationLogger;
   let useCases: {
     getProfile: GetProfile;
     listProjects: ListProjects;
@@ -192,15 +194,15 @@ describe('MCP SDK and application contracts', () => {
     resolve = vi.fn((requestId: string) =>
       Promise.resolve(principal === null ? null : { ...principal, requestId }),
     );
+    const capture = (record: InvocationLog) => {
+      logs.push(record);
+    };
+    logger = { info: capture, warn: capture, error: capture };
     server = createMcpServer({
       useCases,
       context: { resolve },
       admission,
-      logger: {
-        info: (record) => {
-          logs.push(record);
-        },
-      },
+      logger,
     });
     client = new Client({ name: 'contract-tests', version: '1.0.0' });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -216,6 +218,76 @@ describe('MCP SDK and application contracts', () => {
         .length,
     );
   });
+
+  it.each([
+    { code: null, level: 'info', expected: 30 },
+    { code: 'NOT_FOUND', level: 'info', expected: 40 },
+    { code: 'FORBIDDEN', level: 'warn', expected: 40 },
+    { code: 'UNAUTHENTICATED', level: 'warn', expected: 40 },
+    { code: 'VALIDATION_ERROR', level: 'warn', expected: 40 },
+    { code: 'CONFLICT', level: 'warn', expected: 40 },
+    { code: 'RATE_LIMITED', level: 'warn', expected: 40 },
+    { code: 'INTERNAL_ERROR', level: 'warn', expected: 50 },
+    { code: null, level: 'warn', expected: null },
+    { code: 'INTERNAL_ERROR', level: 'silent', expected: null },
+  ] as const)(
+    'logs $code at the correct severity with LOG_LEVEL=$level',
+    async ({ code, level, expected }) => {
+      await client.close();
+      await server.close();
+      const lines: string[] = [];
+      const sink = createLogger(level, {
+        write: (line) => {
+          lines.push(line);
+        },
+      });
+      server = createMcpServer({ useCases, context: { resolve }, admission, logger: sink });
+      client = new Client({ name: 'log-severity', version: '1' });
+      const [clientWire, serverWire] = InMemoryTransport.createLinkedPair();
+      await server.connect(serverWire);
+      await client.connect(clientWire);
+      if (code !== null)
+        vi.spyOn(useCases.getProfile, 'execute').mockRejectedValueOnce(new ApplicationError(code));
+      const result = await client.callTool({ name: 'get_profile', arguments: {} });
+      expect(lines).toHaveLength(expected === null ? 0 : 1);
+      if (expected !== null) {
+        const record: unknown = JSON.parse(lines[0] ?? '');
+        expect(record).toMatchObject({
+          level: expected,
+          event: 'mcp.invocation',
+          toolName: 'get_profile',
+          resultStatus: code === null ? 'success' : 'error',
+        });
+        expect(record).toHaveProperty('requestId', expect.any(String));
+        if (code !== null)
+          expect(record).toMatchObject({
+            errorCategory: code,
+            requestId: errorPayload(result).error.requestId,
+          });
+        expect(lines.join('')).not.toContain('private-');
+      }
+    },
+  );
+
+  it.each(['warn', 'error'] as const)(
+    'a failed %s sink cannot replace the safe response or write stdout',
+    async (level) => {
+      const stdout = vi.spyOn(process.stdout, 'write');
+      vi.spyOn(logger, level).mockImplementation(() => {
+        throw new Error('private-sink-secret');
+      });
+      vi.spyOn(useCases.getProfile, 'execute').mockRejectedValueOnce(
+        new ApplicationError(level === 'error' ? 'INTERNAL_ERROR' : 'NOT_FOUND'),
+      );
+      const result = await client.callTool({ name: 'get_profile', arguments: {} });
+      expect(errorPayload(result).error.code).toBe(
+        level === 'error' ? 'INTERNAL_ERROR' : 'NOT_FOUND',
+      );
+      expect(JSON.stringify(result)).not.toContain('private-sink-secret');
+      expect(stdout).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('shares eight slots across tools and SDK server instances, rejects immediately, and never queues', async () => {
     const profile = await useCases.getProfile.execute(principal, {});
@@ -233,7 +305,7 @@ describe('MCP SDK and application contracts', () => {
       useCases,
       context: { resolve },
       admission,
-      logger: { info: (record) => logs.push(record) },
+      logger,
     });
     const otherClient = new Client({ name: 'shared-capacity', version: '1' });
     const [clientWire, serverWire] = InMemoryTransport.createLinkedPair();
@@ -249,8 +321,17 @@ describe('MCP SDK and application contracts', () => {
       await flush();
       expect(profileCall).toHaveBeenCalledTimes(4);
       expect(projectCall).toHaveBeenCalledTimes(4);
+      const warning = vi.spyOn(logger, 'warn');
       const denied = errorPayload(await client.callTool({ name: 'get_profile', arguments: {} }));
       expect(denied.error.code).toBe('RATE_LIMITED');
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          event: 'mcp.invocation',
+          errorCategory: 'RATE_LIMITED',
+          failureKind: 'admission',
+          requestId: denied.error.requestId,
+        }),
+      );
       expect(resolve).toHaveBeenCalledTimes(8);
       profileGate.resolve(profile);
       projectGate.resolve(projects);
@@ -346,7 +427,12 @@ describe('MCP SDK and application contracts', () => {
         expect(
           logs
             .slice(0, 8)
-            .every((log) => log.resultStatus === 'error' && log.errorCategory === 'INTERNAL_ERROR'),
+            .every(
+              (log) =>
+                log.resultStatus === 'error' &&
+                log.errorCategory === 'INTERNAL_ERROR' &&
+                log.failureKind === 'deadline',
+            ),
         ).toBe(true);
         expect(JSON.stringify(logs)).not.toContain('private-');
         expect((await client.callTool({ name: 'list_projects', arguments: {} })).isError).not.toBe(
@@ -431,6 +517,7 @@ describe('MCP SDK and application contracts', () => {
       expect(JSON.stringify(denied).length).toBeLessThan(1000);
     }
     expect(logs.map((log) => log.resultStatus)).toEqual(['success', 'error', 'error', 'error']);
+    expect(logs.slice(1).every((log) => log.failureKind === 'response_size')).toBe(true);
   });
 
   it('advertises seven read-only tools and one idempotent mutation with strict schemas', async () => {
@@ -1113,6 +1200,7 @@ describe('MCP SDK and application contracts', () => {
         requestId: payload.error.requestId,
         resultStatus: 'error',
         errorCategory: 'INTERNAL_ERROR',
+        failureKind: 'execution',
       });
       expect(JSON.stringify({ payload, logs })).not.toContain('private-secret');
       expect(JSON.stringify({ payload, logs })).not.toContain('database');
@@ -1594,6 +1682,7 @@ describe('MCP SDK and application contracts', () => {
     const payload = errorPayload(await client.callTool({ name: 'get_profile', arguments: {} }));
     expect(payload.error.code).toBe('INTERNAL_ERROR');
     expect(logs[0]?.errorCategory).toBe('INTERNAL_ERROR');
+    expect(logs[0]?.failureKind).toBe('output_validation');
   });
 
   it('rejects a mutation after shutdown admission closes before context or repository work', async () => {
@@ -1613,5 +1702,25 @@ describe('MCP SDK and application contracts', () => {
     const payload = errorPayload(await client.callTool({ name: 'get_profile', arguments: {} }));
     expect(payload.error.requestId).toBe(logs[0]?.requestId);
     expect(fixture.calls).toEqual([]);
+    expect(logs[0]?.failureKind).toBe('context_resolution');
+  });
+
+  it('a throwing diagnostic sink cannot replace a mutation result or strand admission', async () => {
+    vi.spyOn(logs, 'push').mockImplementation(() => {
+      throw new Error('private-sink-secret SQL /private/path');
+    });
+    const result = await client.callTool({ name: 'create_project_note', arguments: noteInput() });
+    expect(result.isError).not.toBe(true);
+    expect(toolSchemas.create_project_note.output.parse(result.structuredContent).created).toBe(
+      true,
+    );
+    expect(createNote).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(result)).not.toContain('private-sink-secret');
+    for (let index = 0; index < 9; index += 1) {
+      expect((await client.callTool({ name: 'get_profile', arguments: {} })).isError).not.toBe(
+        true,
+      );
+    }
+    expect(release).toHaveBeenCalledTimes(10);
   });
 });

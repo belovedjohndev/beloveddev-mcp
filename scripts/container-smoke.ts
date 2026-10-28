@@ -13,10 +13,24 @@ import { createTestDatabase } from '@beloveddev/test-support/test-database';
 import { seedTwoTenants } from '@beloveddev/test-support/tenant-fixtures';
 import { seedOpportunity } from '@beloveddev/test-support/opportunity-fixtures';
 import { safeErrorSchema, toolSchemas } from '@beloveddev/mcp/schemas';
+import { sanitizeSecurityDiagnostic } from './security-check.ts';
 
 const exec = promisify(execFile);
 const workspace = fileURLToPath(new URL('../', import.meta.url));
-const image = 'beloveddev-mcp:container-smoke';
+const experimental = process.argv[2] === '--distroless';
+const trixie = process.argv[2] === '--trixie';
+const image = experimental
+  ? 'beloveddev-mcp:distroless-smoke'
+  : trixie
+    ? 'beloveddev-mcp:trixie-smoke'
+    : 'beloveddev-mcp:container-smoke';
+const dockerfile = experimental
+  ? 'Dockerfile.distroless'
+  : trixie
+    ? 'Dockerfile.trixie'
+    : 'Dockerfile';
+const nodeBinary = experimental ? '/nodejs/bin/node' : 'node';
+const runtimeUser = experimental ? 65532 : 1000;
 const expectedTools = Object.keys(toolSchemas).sort();
 let phase = 'build';
 
@@ -26,10 +40,39 @@ async function docker(args: string[], timeout = 30_000) {
     maxBuffer: 8 * 1024 * 1024,
     windowsHide: true,
   });
+  const buildDiagnostic = phase === 'build' || phase === 'cold repeat build';
+  let buildStdout = '',
+    buildStderr = '';
+  if (buildDiagnostic) {
+    operation.child.stdout?.on('data', (chunk: Buffer) => {
+      buildStdout = (buildStdout + chunk.toString()).slice(-16384);
+    });
+    operation.child.stderr?.on('data', (chunk: Buffer) => {
+      buildStderr = (buildStderr + chunk.toString()).slice(-16384);
+    });
+  }
   try {
     const { stdout } = await within(operation, timeout);
     return stdout.trim();
-  } catch {
+  } catch (error: unknown) {
+    // Build stages receive no runtime secrets. Retain only sanitized public
+    // diagnostics here; runtime Docker failures must keep their safe phase only.
+    if (buildDiagnostic) {
+      const failure = z
+        .object({ code: z.number().int(), stdout: z.string(), stderr: z.string() })
+        .safeParse(error);
+      process.stderr.write(
+        JSON.stringify({
+          event: 'container_smoke.build_failed',
+          phase,
+          exitCode: failure.success ? failure.data.code : null,
+          deadline:
+            error instanceof Error && error.message === 'Container smoke deadline exceeded.',
+          stdout: sanitizeSecurityDiagnostic(failure.success ? failure.data.stdout : buildStdout),
+          stderr: sanitizeSecurityDiagnostic(failure.success ? failure.data.stderr : buildStderr),
+        }) + '\n',
+      );
+    }
     // On Windows, killing docker.exe alone leaves its Buildx plugin holding
     // the pipes open. Terminate this command's tree before releasing its pipes.
     const child = operation.child;
@@ -52,7 +95,7 @@ async function docker(args: string[], timeout = 30_000) {
         phase,
       }) + '\n',
     );
-    throw new Error(`Docker operation failed during ${phase}.`);
+    throw new Error(`Docker operation failed during ${phase}.`, { cause: error });
   }
 }
 
@@ -163,7 +206,7 @@ function launch(network: string, environment: Record<string, string>, hideMigrat
       await docker([
         'exec',
         name,
-        'node',
+        nodeBinary,
         '--input-type=module',
         '-e',
         `
@@ -348,6 +391,8 @@ async function sourceSnapshot() {
         (file) =>
           [
             'Dockerfile',
+            'Dockerfile.distroless',
+            'Dockerfile.trixie',
             '.dockerignore',
             'package.json',
             'package-lock.json',
@@ -379,6 +424,7 @@ async function sourceSnapshot() {
 }
 
 async function run() {
+  assert(process.argv.length <= 3 && (process.argv[2] === undefined || experimental || trixie));
   assert.equal(await docker(['version', '--format', '{{.Server.Os}}']), 'linux');
   const builder = `beloveddev-release-${randomUUID()}`;
   const source = await sourceSnapshot();
@@ -414,15 +460,17 @@ async function run() {
       'type=docker,rewrite-timestamp=true',
       '--tag',
       image,
+      '--file',
+      join(source.directory, dockerfile),
       source.directory,
     ];
     try {
       process.stderr.write('Building the source-only release image.\n');
-      await docker(buildArgs, 600_000);
+      await docker(buildArgs, 900_000);
       imageId = await docker(['image', 'inspect', image, '--format', '{{.Id}}']);
       phase = 'cold repeat build';
       process.stderr.write('Comparing a cold rebuild of the release image.\n');
-      await docker([...buildArgs, '--no-cache'], 600_000);
+      await docker([...buildArgs, '--no-cache'], 900_000);
       assert.equal(await docker(['image', 'inspect', image, '--format', '{{.Id}}']), imageId);
     } finally {
       await docker(['buildx', 'rm', '--force', builder]);
@@ -434,7 +482,7 @@ async function run() {
   const configuration = z
     .object({
       Config: z.object({
-        User: z.literal('1000:1000'),
+        User: z.literal(`${runtimeUser}:${runtimeUser}`),
         Entrypoint: z.array(z.string()),
         Cmd: z.array(z.string()),
         Env: z.array(z.string()),
@@ -442,7 +490,7 @@ async function run() {
       }),
     })
     .parse((JSON.parse(await docker(['image', 'inspect', image])) as unknown[])[0]);
-  assert.deepEqual(configuration.Config.Entrypoint, ['node']);
+  assert.deepEqual(configuration.Config.Entrypoint, [nodeBinary]);
   assert.deepEqual(configuration.Config.Cmd, ['/app/apps/mcp-server/dist/main.js']);
   assert.equal(configuration.Config.ExposedPorts, undefined);
   assert(!configuration.Config.Env.some((value) => /^(DATABASE_|MCP_|NODE_ENV=)/.test(value)));
@@ -469,12 +517,16 @@ async function run() {
       import {readFileSync, existsSync, accessSync, constants, readdirSync} from 'node:fs';
       import {createHash} from 'node:crypto';
       import {MAX_ACTIVE_INVOCATIONS, APPLICATION_RESPONSE_DEADLINE_MS, MAX_SUCCESS_RESPONSE_BYTES} from '@beloveddev/mcp/invocation-policy';
-      assert.equal(process.getuid(), 1000);
+      assert.equal(process.getuid(), ${runtimeUser});
       assert.equal(process.platform, 'linux');
       assert.match(process.versions.node, /^24\\./);
+      assert(Number(process.versions.node.split('.')[1]) >= 12);
       assert.throws(() => accessSync('/app', constants.W_OK));
       assert.deepEqual([MAX_ACTIVE_INVOCATIONS, APPLICATION_RESPONSE_DEADLINE_MS, MAX_SUCCESS_RESPONSE_BYTES], [8, 30000, 1048576]);
       for (const path of ['.env', '.git', 'scripts', 'docs', 'apps/mcp-server/src', 'packages/test-support', 'node_modules/typescript', 'node_modules/vitest', 'node_modules/eslint', 'node_modules/@modelcontextprotocol/client', '/usr/local/bin/npm']) assert(!existsSync(path));
+      if (${experimental}) {
+        for (const path of ['/bin/sh', '/bin/bash', '/busybox/sh', '/usr/bin/apt-get', '/usr/bin/dpkg', '/usr/bin/npm', '/nodejs/bin/npm']) assert(!existsSync(path));
+      }
       for (const workspace of readdirSync('node_modules/@beloveddev')) assert(existsSync('node_modules/@beloveddev/' + workspace + '/package.json'));
       const migrations = ${JSON.stringify(migrations)};
       for (const [path, hash] of Object.entries(migrations)) assert.equal(createHash('sha256').update(readFileSync('packages/database/migrations/' + path)).digest('hex'), hash);
@@ -482,6 +534,111 @@ async function run() {
     `,
   ]);
   const artifact = z.object({ node: z.string(), migrations: z.number() }).parse(JSON.parse(probe));
+  if (experimental) {
+    phase = 'distroless filesystem permissions';
+    const expected: Record<string, string> = {};
+    for (const path of [
+      'package.json',
+      'apps/mcp-server/package.json',
+      ...['domain', 'application', 'database', 'infrastructure', 'mcp'].map(
+        (name) => 'packages/' + name + '/package.json',
+      ),
+    ]) {
+      expected['/app/' + path] = createHash('sha256')
+        .update(await readFile(new URL('../' + path, import.meta.url)))
+        .digest('hex');
+    }
+    for (const [path, hash] of Object.entries(migrations)) {
+      expected['/app/packages/database/migrations/' + path] = hash;
+    }
+    assert.equal(Object.keys(expected).length, 18);
+    for (const user of [1000, runtimeUser]) {
+      for (const readOnly of [false, true]) {
+        const result = await docker([
+          'run',
+          '--rm',
+          '--network=none',
+          ...(readOnly ? ['--read-only'] : []),
+          '--cap-drop=ALL',
+          '--security-opt=no-new-privileges',
+          '--pids-limit=64',
+          '--memory=256m',
+          '--cpus=1',
+          '--user',
+          user + ':' + user,
+          image,
+          '--input-type=module',
+          '-e',
+          `
+            import assert from 'node:assert/strict';
+            import {lstatSync, realpathSync, readFileSync, readdirSync, openSync, closeSync, renameSync, existsSync, accessSync, constants} from 'node:fs';
+            import {createHash, randomUUID} from 'node:crypto';
+            import {dirname, join} from 'node:path';
+            assert.equal(process.getuid(), ${user});
+            assert.equal(process.getgid(), ${user});
+            const expected = ${JSON.stringify(expected)};
+            const parents = new Set();
+            const refused = (operation, path) => assert.throws(operation, (error) =>
+              error.code === 'EACCES' || (${readOnly} && error.code === 'EROFS'), path);
+            for (const [path, hash] of Object.entries(expected)) {
+              const status = lstatSync(path);
+              assert(status.isFile() && !status.isSymbolicLink(), path);
+              assert.equal(status.nlink, 1, path);
+              assert.deepEqual([status.uid, status.gid, status.mode & 0o7777], [0, 0, 0o644], path);
+              assert.equal(realpathSync(path), path);
+              assert.equal(createHash('sha256').update(readFileSync(path)).digest('hex'), hash);
+              refused(() => { const fd = openSync(path, 'r+'); closeSync(fd); }, path);
+              const destination = path + '.permission-probe-' + randomUUID();
+              assert(!existsSync(destination));
+              refused(() => {
+                let renamed = false;
+                try { renameSync(path, destination); renamed = true; }
+                finally { if (renamed) renameSync(destination, path); }
+              }, path);
+              assert.equal(createHash('sha256').update(readFileSync(path)).digest('hex'), hash);
+              for (let parent = dirname(path); ; parent = dirname(parent)) {
+                parents.add(parent);
+                if (parent === '/') break;
+              }
+            }
+            for (const path of parents) {
+              const status = lstatSync(path);
+              assert(status.isDirectory() && !status.isSymbolicLink(), path);
+              assert.deepEqual([status.uid, status.gid], [0, 0], path);
+              assert.equal(status.mode & 0o022, 0, path);
+              assert.equal(status.mode & 0o555, 0o555, path);
+              refused(() => accessSync(path, constants.W_OK), path);
+            }
+            assert.equal(lstatSync('/app').mode & 0o7777, 0o755);
+            let regularFiles = 0;
+            function inspect(path) {
+              const status = lstatSync(path);
+              if (status.isDirectory()) {
+                for (const name of readdirSync(path)) inspect(join(path, name));
+              } else if (status.isFile()) {
+                regularFiles++;
+                assert.equal(status.mode & 0o022, 0, path);
+              }
+            }
+            inspect('/app');
+            assert((lstatSync('/nodejs/bin/node').mode & 0o111) !== 0);
+            process.stdout.write(JSON.stringify({user: process.getuid(), readOnly: ${readOnly}, files: Object.keys(expected).length, regularFiles}));
+          `,
+        ]);
+        const checked = z
+          .object({
+            user: z.literal(user),
+            readOnly: z.literal(readOnly),
+            files: z.literal(18),
+            regularFiles: z.number().int().positive(),
+          })
+          .parse(JSON.parse(result));
+        process.stderr.write(
+          'Distroless permission check passed: ' + JSON.stringify(checked) + '\n',
+        );
+      }
+    }
+  }
   phase = 'PostgreSQL provisioning';
   const postgres = await createTlsPostgres();
   try {

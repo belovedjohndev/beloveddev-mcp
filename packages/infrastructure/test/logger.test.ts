@@ -71,4 +71,39 @@ describe('structured logging', () => {
     logger.fatal('Filtered message');
     expect(lines).toEqual([]);
   });
+
+  it('suppresses raw error objects and driver details while retaining safe failure fields', () => {
+    const lines: string[] = [];
+    const logger = createLogger('info', {
+      write: (line) => {
+        lines.push(line);
+      },
+    });
+    const error = new Error('private-password SQL /private/config');
+    logger.error(
+      {
+        event: 'mcp.invocation',
+        failureKind: 'execution',
+        errorCategory: 'INTERNAL_ERROR',
+        err: error,
+        error,
+        cause: error,
+        stack: error.stack,
+        sql: 'private-query',
+        parameters: ['private-content'],
+        detail: 'private-detail',
+        nested: { err: error },
+      },
+      'Operation failed',
+    );
+    expect(lines.join('')).not.toContain('private-');
+    expect(lines.join('')).not.toContain('/private/');
+    expect(JSON.parse(lines[0] ?? '') as unknown).toMatchObject({
+      event: 'mcp.invocation',
+      failureKind: 'execution',
+      errorCategory: 'INTERNAL_ERROR',
+      err: '[REDACTED]',
+      nested: { err: '[REDACTED]' },
+    });
+  });
 });

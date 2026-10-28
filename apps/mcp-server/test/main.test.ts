@@ -212,6 +212,8 @@ describe('stdio composition root', () => {
     ['MCP_CURSOR_SECRET', undefined],
     ['MCP_CURSOR_SECRET', 'private-too-short'],
     ['MCP_CURSOR_SECRET', 'private-'.repeat(147)],
+    ['MCP_CURSOR_SECRET', 'x'.repeat(64)],
+    ['MCP_CURSOR_SECRET', 'REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS'],
   ])('fails safely for invalid %s configuration', (key, value) => {
     const result = runServer({ [key ?? '']: value });
     expect(result.error).toBeUndefined();

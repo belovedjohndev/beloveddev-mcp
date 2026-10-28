@@ -5,7 +5,7 @@ project evidence, blockers, and freelance opportunities. MCP is its interface;
 deterministic application code owns authorization, tenant scope, data integrity,
 transactions, idempotency, and business rules.
 
-## Current status: Milestone 8-F
+## Current status: M8-F and M8-H implemented; M8-G release blocked
 
 The stdio MCP server exposes eight tools backed by tenant-scoped
 PostgreSQL repositories. The tools `get_profile`, `list_projects`, `get_project`,
@@ -435,3 +435,14 @@ objectives, scheduling, retention, encrypted/off-site storage and cutover planni
 Implementation references: [Node environment files](https://nodejs.org/api/cli.html#--env-filefile),
 [PostgreSQL image initialization and storage](https://hub.docker.com/_/postgres),
 and [Pino logging options](https://github.com/pinojs/pino/blob/main/docs/api.md).
+
+## M8-G security reconciliation
+
+Reconciled security gates and safe logging/key validation are under source review
+on merged main with M8-H1/H2 preserved. Compatible Zod 4.6.6 and Vite 8.3.3
+patches clear both npm audits. Live scanner/error enforcement passes; complete
+current image scans still fail the unchanged High/Critical release gate.
+The patched official Bookworm image passes packaged compatibility and identical
+cold rebuild checks. This is not a clean image assessment or release approval. See the [dated review](docs/m8-g-security-review.md),
+[reconciliation specification](docs/m8-g-reconciliation-spec.md), and
+[security policy and commands](docs/security.md). No experimental base is promoted.
