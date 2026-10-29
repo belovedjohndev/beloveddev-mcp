@@ -13,6 +13,7 @@
   },
   "packageManager": "npm@11.6.2",
   "scripts": {
+    "eval": "npm run build && node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run --config vitest.evaluation.config.ts",
     "build": "tsc -b",
     "typecheck": "npm run build \u0026\u0026 tsc -p tsconfig.check.json",
     "lint": "npm run build \u0026\u0026 eslint . --max-warnings=0",

@@ -272,6 +272,31 @@ concurrency, exact retries, audit rollback, readiness, disconnects, and recovery
 See [verification evidence and its limits](docs/case-study.md#verification).
 Passing functional tests is not a clean vulnerability scan or deployment approval.
 
+## Deterministic workflow evaluations
+
+M9-B composes existing MCP tools against synthetic fixtures on a dedicated test
+PostgreSQL instance. Supply TEST_DATABASE_URL with CREATE DATABASE/ROLE privileges
+(the same isolated provisioning configuration as integration tests), then run:
+
+```sh
+npm run eval
+```
+
+The four workflows check evidence-grounded opportunity results, tenant/permission
+refusals, explicit note retries and audit reconciliation, and safe unavailable
+resource handling. A strict custom reporter writes a new machine-readable JSON
+report under ignored .evaluation-reports and exits nonzero for failed, incomplete,
+skipped, or cleanup-failed scenarios. Reports contain allowlisted progress and
+failure codes, never database URLs, raw errors, or request/response content.
+Only invocation-created databases/roles are cleaned up; never use production
+credentials or endpoints for fixture provisioning.
+
+These are scripted workflow regressions, not evidence that a live LLM selected
+tools or reasoned correctly. No LLM provider is called. The SDK transport is
+in-memory; packaged stdio and operational checks remain separate. See the
+[evaluation specification](docs/m9-b-evaluation-spec.md) for exact expectations,
+negative controls, cleanup, reporting, and limitations.
+
 ## Workspace and documentation
 
 ```text
