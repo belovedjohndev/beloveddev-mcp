@@ -915,6 +915,35 @@ adapters require a subsequent specification. M8-G release blockers are unchanged
 
 ---
 
+## M9-C1: Safe offline agent-evaluation foundation
+
+The [C1 specification](m9-c1-agent-evaluation-spec.md) defines a small model-call
+boundary, SDK read-only gateway, independent structured-claim oracles, bounded
+usage/execution and safe reporting. Reuse existing actual MCP schemas/use cases,
+restricted PostgreSQL fixtures and cleanup. Extract only runtime composition from
+M9-B for reuse; preserve its original workflow assertions. No new workspace,
+dependency, domain rule, migration, authentication or MCP contract is introduced.
+
+npm run eval:agent validates six synthetic scenarios using a deterministic
+offline adapter. Scenarios cover evidence, opportunity selection, score/risk
+interpretation, unavailable information, tenant containment and mutation refusal.
+Compare claims with independent fixture expectations and actual MCP results.
+Track selected, rejected, dispatched and completed calls separately. Blocked
+writes are failures, not independent refusal. C1 seeds no project notes and
+executes no mutation. Token counts are simulated and usage completeness is
+explicit on timeout/failure. Scenario/report/cleanup failures exit nonzero.
+
+M9-B is deterministic workflow evaluation; M9-C1 is offline harness validation;
+M9-C2 is future real-model evaluation. C1 rejects every live adapter, including
+CI, and has no live enable flag. No billable API calls or real LLM performance
+results are part of this slice. C2 needs separately reviewed provider code,
+explicit owner-authorized live opt-in outside CI, synthetic fixtures, private
+credentials, provider-side limits and usage provenance. Structured claims cannot
+prove all natural-language prose is grounded. M8-G isolation and release blockers
+remain unchanged.
+
+---
+
 ## 12. Verification Commands
 
 Milestone 0 uses npm workspaces and the committed npm lockfile:
