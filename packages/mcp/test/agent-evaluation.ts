@@ -115,6 +115,14 @@ export const failureSchema = z.enum([
   'cleanup_failed',
   'setup_failed',
   'invalid_report',
+  'provider_configuration',
+  'provider_authentication',
+  'provider_rate_limited',
+  'provider_service_failure',
+  'provider_invalid_response',
+  'provider_usage_unknown',
+  'provider_budget',
+  'provider_response_limit',
 ]);
 export type AgentFailureCode = z.infer<typeof failureSchema>;
 export class AgentFailure extends Error {
@@ -122,7 +130,7 @@ export class AgentFailure extends Error {
     super(code);
   }
 }
-const actionSchema = z.discriminatedUnion('type', [
+export const actionSchema = z.discriminatedUnion('type', [
   z.strictObject({
     type: z.literal('tool_call'),
     name: z.string().min(1).max(128),
@@ -130,11 +138,18 @@ const actionSchema = z.discriminatedUnion('type', [
   }),
   z.strictObject({ type: z.literal('final'), claims: claimsSchema }),
 ]);
-const usageSchema = z.strictObject({
-  kind: z.literal('simulated'),
+export const usageSchema = z.strictObject({
+  kind: z.enum(['simulated', 'provider_reported']),
   inputTokens: z.number().int().nonnegative().max(1_000_000),
   outputTokens: z.number().int().nonnegative().max(1_000_000),
 });
+const reportUsageSchema = usageSchema
+  .extend({
+    inputTokens: z.number().int().nonnegative().max(36_000_000),
+    outputTokens: z.number().int().nonnegative().max(36_000_000),
+    complete: z.boolean(),
+  })
+  .strict();
 const modelReplySchema = z.strictObject({ output: z.string(), usage: usageSchema });
 const modelResponseSchema = z.toJSONSchema(actionSchema);
 export interface ModelRequest {
@@ -145,7 +160,8 @@ export interface ModelRequest {
   readonly maxOutputTokens: number;
 }
 export interface ModelAdapter {
-  readonly mode: 'offline' | 'live';
+  readonly mode: 'offline' | 'provider_mock' | 'live';
+  usageSnapshot?(): z.infer<typeof usageSchema> & { complete: boolean };
   complete(
     request: ModelRequest,
     signal: AbortSignal,
@@ -218,7 +234,7 @@ export const agentReportSchema = z
     rejectedTools: z.array(reportTool).max(5),
     dispatchedTools: z.array(readOnlyToolSchema).max(4),
     executedTools: z.array(readOnlyToolSchema).max(4),
-    usage: usageSchema.extend({ complete: z.boolean() }).strict(),
+    usage: reportUsageSchema,
     cleanup: z.enum(['passed', 'failed']),
     refusedWithoutToolCall: z.boolean(),
   })
@@ -364,7 +380,12 @@ export async function runAgentScenario(
     const scenario = parsed.data;
     report.id = scenario.id;
     if (!parsedLimits.success) throw new AgentFailure('invalid_limits');
-    if (model.mode !== 'offline') throw new AgentFailure('live_disabled');
+    if (model.mode !== 'offline' && model.mode !== 'provider_mock')
+      throw new AgentFailure('live_disabled');
+    if (model.mode === 'provider_mock') {
+      if (!model.usageSnapshot) throw new AgentFailure('provider_configuration');
+      report.usage.kind = 'provider_reported';
+    }
     const executionStarted = performance.now();
     await bounded(
       async (signal) => {
@@ -410,7 +431,12 @@ export async function runAgentScenario(
             throw error instanceof AgentFailure ? error : new AgentFailure('provider_failure');
           }
           const checked = modelReplySchema.safeParse(response);
-          if (!checked.success) throw new AgentFailure('malformed_model_response');
+          if (
+            !checked.success ||
+            checked.data.usage.kind !==
+              (model.mode === 'offline' ? 'simulated' : 'provider_reported')
+          )
+            throw new AgentFailure('malformed_model_response');
           report.usage.inputTokens += checked.data.usage.inputTokens;
           report.usage.outputTokens += checked.data.usage.outputTokens;
           report.usage.complete = true;
@@ -474,6 +500,26 @@ export async function runAgentScenario(
     report.status = 'failed';
     report.failure = error instanceof AgentFailure ? error.code : 'provider_failure';
   } finally {
+    if (model.mode === 'provider_mock' && model.usageSnapshot) {
+      try {
+        const snapshot = reportUsageSchema.safeParse(model.usageSnapshot());
+        if (snapshot.success && snapshot.data.kind === 'provider_reported') {
+          report.usage = snapshot.data;
+          if (!snapshot.data.complete) {
+            report.status = 'failed';
+            report.failure ??= 'provider_usage_unknown';
+          }
+        } else {
+          report.status = 'failed';
+          report.failure ??= 'provider_usage_unknown';
+          report.usage.complete = false;
+        }
+      } catch {
+        report.status = 'failed';
+        report.failure ??= 'provider_usage_unknown';
+        report.usage.complete = false;
+      }
+    }
     for (const close of [() => model.close(), () => gateway.close()]) {
       try {
         await bounded(close, limits.cleanupTimeoutMs, 'cleanup_failed');
@@ -493,7 +539,12 @@ export function aggregateAgentReports(
   const reports = scenarioIds.map((id) => {
     const matches = outcomes.filter((outcome) => outcome.name === id);
     const parsed = agentReportSchema.safeParse(matches[0]?.report);
-    if (matches.length !== 1 || !parsed.success || parsed.data.id !== id)
+    if (
+      matches.length !== 1 ||
+      !parsed.success ||
+      parsed.data.id !== id ||
+      parsed.data.usage.kind !== 'simulated'
+    )
       return failedAgentReport(id, 'invalid_report');
     if (matches[0]?.state !== 'passed')
       return {

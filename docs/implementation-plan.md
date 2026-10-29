@@ -944,6 +944,33 @@ remain unchanged.
 
 ---
 
+## M9-C2A: Mock-tested provider integration boundary
+
+The [C2A specification](m9-c2a-provider-spec.md) defines the test-only OpenAI
+Responses adapter, injected mock transport/input estimator, strict supported wire
+profile, safe failures, invocation budget reservations and mock control report.
+All selected tools still pass through the existing seven-tool read-only gateway
+and independent C1 oracles. Preserve all six synthetic scenarios and C1 usage/report
+compatibility. No production domain, authentication, MCP contract, migration or
+M8-G security changes are included.
+
+Run eval:provider:test for offline provider controls and a private count-only JSON
+artifact; also run format:check, verify, db:check, verify:all, eval and eval:agent.
+Exercise failure reporting/nonzero exit, authorization/tenant regressions, no writes,
+timeouts, unknown usage and independently attempted cleanup. Preserve migration bytes
+and existing resources; distinguish fresh-LF checkout verification where necessary.
+
+M9-B = scripted workflows; M9-C1 = offline harness; M9-C2A = mocked provider boundary;
+M9-C2B = future approved live-model evaluation. C2A accepts no network transport,
+provides no live command, and never reads a key from the environment. Actual LLM
+quality, provider schema/model compatibility, live tokenizer estimates, pricing,
+network behavior and billing remain unverified. C2B needs separate source review,
+exact model/pricing verification, owner approval and invocation-scoped limits,
+private credentials, synthetic-only data and account-level billing controls.
+Do not enable live execution in ordinary CI or the existing eval commands. Mocked
+provider fields are not simulated C1 tokens or actual live measurements. Missing/late
+usage remains incomplete. Existing release blockers remain unchanged.
+
 ## 12. Verification Commands
 
 Milestone 0 uses npm workspaces and the committed npm lockfile:

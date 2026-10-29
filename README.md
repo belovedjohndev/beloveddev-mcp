@@ -330,6 +330,44 @@ a reviewed adapter, explicit owner opt-in outside CI, private credential
 injection and provider-side usage/cost limits. See the
 [M9-C1 specification](docs/m9-c1-agent-evaluation-spec.md).
 
+## Mock OpenAI provider boundary
+
+M9-B is scripted deterministic MCP workflow evaluation. M9-C1 is offline agent-harness
+validation. M9-C2A adds a mock-tested OpenAI Responses API boundary. M9-C2B is future,
+separately authorized live-model evaluation. None of these mocked results measures
+actual LLM accuracy, reasoning quality or arbitrary prose grounding.
+
+```sh
+npm run eval:provider:test
+```
+
+The test-only adapter uses an injected mock HTTP transport and estimator, validates
+strict request/response profiles, and normalizes structured actions into the same
+seven-tool read-only gateway. Existing authorization and tenant isolation remain
+authoritative; project-note writes cannot be dispatched by the evaluation gateway.
+No provider-native execution path, new dependency or production change is added.
+
+Responses usage fields are labeled provider_reported, with mock provenance in the
+provider-control report; C1 simulated counts and offline reports remain distinct.
+Conservative per-invocation call/token/cost reservations precede requests and are
+not recycled. Missing/late usage is incomplete, never evidence of zero charges.
+Mock token estimates and fictional test pricing do not verify live costs.
+
+Both existing evaluation commands and ordinary CI remain offline. No API key or
+environment flag enables live execution. Network transports are rejected before
+credential resolution; no fetch implementation or live launcher is shipped.
+Provider keys must stay outside source, model inputs and reports. Reports under
+.evaluation-reports/provider-controls-*.json contain safe control counts and fail
+nonzero on missing, skipped or failed controls.
+
+Before C2B, review the exact model snapshot and supported text-only response profile,
+model-compatible token estimation, verified pricing (including cache-write rates),
+explicit owner approval and monetary/call/token ceilings, account-level billing
+controls, private secret injection and a network transport with redirect/deadline
+controls. Local cancellation and reservations cannot guarantee final provider billing.
+See the [M9-C2A specification](docs/m9-c2a-provider-spec.md) for verified boundaries
+and remaining limitations. M8-G isolation and release blockers are unchanged.
+
 ## Workspace and documentation
 
 ```text
