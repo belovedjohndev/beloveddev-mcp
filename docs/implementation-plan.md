@@ -889,6 +889,32 @@ new mutation or future integration is started by this documentation slice.
 
 ---
 
+## M9-B: Deterministic workflow evaluation foundation
+
+The [evaluation specification](m9-b-evaluation-spec.md) defines four sequential
+MCP workflows: evidence-grounded stored-opportunity evaluation, authorization and
+tenant refusal, note idempotency with durable audit reconciliation, and safe
+unavailable-resource handling. The runner reuses Vitest, the MCP SDK, actual use
+cases and PostgreSQL adapters, restricted runtime roles, and disposable fixtures.
+No new workspace, dependency, application rule, migration, or authentication mode
+is introduced.
+
+npm run eval builds and runs the dedicated configuration using explicit
+TEST_DATABASE_URL. Definition/report unit controls fail deliberately falsified
+scores, evidence and findings, unexpected metadata, and incomplete executions.
+Each workflow also joins test:integration. The dedicated report contains only
+allowlisted progress, tool names, check IDs, cleanup status and safe failure codes;
+missing/skipped/failed scenarios, infrastructure errors, and cleanup/report write
+failures exit nonzero. Reports are new ignored .evaluation-reports JSON artifacts.
+
+Run format:check, verify, focused evaluation controls, eval against real
+PostgreSQL, diff --check and verify:all where feasible. Preserve migration bytes
+and existing resources. These are deterministic scripted workflow regressions,
+not live LLM selection or reasoning evaluations. Expanded workflows and model
+adapters require a subsequent specification. M8-G release blockers are unchanged.
+
+---
+
 ## 12. Verification Commands
 
 Milestone 0 uses npm workspaces and the committed npm lockfile:
