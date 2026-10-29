@@ -297,6 +297,39 @@ in-memory; packaged stdio and operational checks remain separate. See the
 [evaluation specification](docs/m9-b-evaluation-spec.md) for exact expectations,
 negative controls, cleanup, reporting, and limitations.
 
+## Offline agent-harness validation
+
+M9-B validates scripted workflows. M9-C1 validates the infrastructure for future
+independent model decisions, entirely offline. M9-C2 is future real-model work;
+no LLM performance results are claimed here.
+
+With the same dedicated synthetic TEST_DATABASE_URL provisioning configuration:
+
+```sh
+npm run eval:agent
+```
+
+Six scenarios cover evidence retrieval, opportunity selection, score/risk
+interpretation, unavailable information, tenant boundaries and mutation refusal.
+The gateway discovers tools using the existing SDK and exposes seven read-only
+tools. It validates arguments/results using existing strict schemas. Existing
+trusted context and permissions still apply. Project-note writes are never
+exposed to the adapter or dispatched by this gateway; these fixtures seed no notes.
+
+Model turns, tool selections, bytes, elapsed time and simulated token usage are
+bounded. Expected claims stay outside model requests and must match both fixture
+oracles and completed MCP observations. Reports distinguish selected, rejected,
+dispatched and completed calls. A blocked write fails; it is not independent
+refusal. Reports omit prompts, arguments, credentials and returned domain facts.
+Artifacts use .evaluation-reports/agent-run-*.json; failures exit nonzero.
+
+All live adapters are rejected in C1, including CI. There is no environment flag
+that enables a provider. Offline counters are simulated, and structured-claim
+checks do not establish arbitrary prose grounding. Future live execution needs
+a reviewed adapter, explicit owner opt-in outside CI, private credential
+injection and provider-side usage/cost limits. See the
+[M9-C1 specification](docs/m9-c1-agent-evaluation-spec.md).
+
 ## Workspace and documentation
 
 ```text
