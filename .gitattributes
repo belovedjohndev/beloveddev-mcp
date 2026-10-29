@@ -1,2 +1,19 @@
+# Keep the supported source/document formats aligned with Prettier on every OS.
+*.ts text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+
+# Extensionless repository configuration and build inputs.
+/.dockerignore text eol=lf
+/.env.example text eol=lf
+/.gitattributes text eol=lf
+/.gitignore text eol=lf
+/.npmrc text eol=lf
+/.nvmrc text eol=lf
+/.prettierignore text eol=lf
+/Dockerfile text eol=lf
+
 # Readiness hashes the original migration bytes. Preserve them on every OS.
 /packages/database/migrations/** -text

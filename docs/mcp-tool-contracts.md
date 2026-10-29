@@ -1,973 +1,686 @@
-# BelovedDev MCP V1 — MCP Tool Contracts
+# MCP tool reference
 
-## 1. Contract Standard
+Implemented at main baseline 2e56b7a2aa61fa7b8bfa8102335a8e87df8338e7.
+[Registrations](../packages/mcp/src/server.ts), [success schemas](../packages/mcp/src/schemas.ts),
+[read inputs](../packages/application/src/read-inputs.ts) and
+[note input](../packages/application/src/write-inputs.ts) are authoritative.
+This document describes all eight tools; no remote authentication, external
+integration or additional mutation is implied.
 
-Every MCP tool must define:
+## Shared contract
 
-```text
-name
-purpose
-input
-output
-required permission
-tenant scope
-side-effect classification
-failure behavior
-audit behavior
-```
+Initialize the SDK connection before calling tools. Each request example below
+is the params object for tools/call (also accepted by the SDK client's callTool).
+Each response example is the success DTO carried in structuredContent. The actual
+MCP result also contains a text content item with JSON.stringify of that same DTO.
+The SDK handles the surrounding JSON-RPC request ID/framing; meta.requestId is a
+separate, application-generated UUID.
 
-MCP schemas are transport contracts.
+All example records, IDs, content, prices and scores are synthetic. Examples were
+generated through the actual application use cases with in-memory repositories,
+then validated against the actual strict success schemas. They are independent
+illustrations, not a seeded database or a real-client transcript. The repeated
+request UUID is an illustrative placeholder; real invocations generate fresh IDs.
+The illustrative search rank is schema-valid retrieval metadata, not a measured
+PostgreSQL rank or benchmark. No database transaction is proven by these examples.
 
-Business rules remain in application/domain code.
+Every input object is strict. Unknown fields, including tenantId, userId, role,
+permissions and requestId, are SDK-rejected before context or use-case execution.
+Tenant, actor, membership, permissions and application request ID come from the
+trusted server boundary. No tool may select a principal. Local identity still
+trusts the operator/launcher; see [security](security.md).
 
-## 2. Standard Response Metadata
+### Permissions and side effects
 
-Successful responses should include:
+| Tools                                                             | Permission             | Roles                 | Durable writes          |
+| ----------------------------------------------------------------- | ---------------------- | --------------------- | ----------------------- |
+| get_profile                                                       | profile:read           | owner, member, viewer | None                    |
+| list_projects, get_project, search_project_evidence, get_blockers | projects:read          | owner, member, viewer | None                    |
+| list_opportunities                                                | opportunities:read     | owner, member, viewer | None                    |
+| evaluate_opportunity                                              | opportunities:evaluate | owner, member         | None                    |
+| create_project_note                                               | project_notes:create   | owner, member         | Note and creation audit |
 
-```text
-meta
-  requestId
-```
+All read tools advertise readOnlyHint=true, destructiveHint=false,
+idempotentHint=true, openWorldHint=false. The note tool changes only
+readOnlyHint to false. Annotations guide clients; actual authorization,
+constraints and transactions enforce behavior. Read tools create operational
+invocation logs but no durable mutation audit.
 
-Paginated responses should additionally include:
+### Pagination and values
 
-```text
-nextCursor?
-```
+List/search limits are integers 1-100, default 20. Optional cursor strings have
+length 1-4096; omit rather than send null. Use an actual returned nextCursor with
+the same filters; it is omitted on the last page. Page size can change because
+limit is not part of cursor binding. Cursors are signed and tenant/capability/
+filter-bound, not encrypted or expiring credentials. Concurrent data changes can
+change later pages; no multi-page snapshot is promised.
 
-Use cursor pagination rather than offset pagination.
+UUID inputs use the actual Zod UUID schema. Dates are ISO datetime strings;
+nullable output fields are present with null, not silently omitted. Monetary
+opportunity outputs are exact two-decimal strings or null. Profile hourlyRate
+also remains a string/null and has no modeled currency.
 
-## 3. Standard Failure Categories
+Allowed values:
 
-Initial safe errors:
+- Project status: planned, active, paused, completed, archived.
+- Opportunity status: new, reviewing, shortlisted, applied, rejected, won, lost, archived.
+- Evidence type: feature, architecture, integration, business_outcome, performance,
+  security, reliability, automation, client_result.
+- Blocker severity: low, medium, high, critical. get_blockers always reads open blockers.
+- Note category: general, decision, requirement, client_feedback, technical, follow_up, research.
+- Opportunity budgetType: fixed, hourly, or null in output.
 
-```text
-UNAUTHENTICATED
-FORBIDDEN
-VALIDATION_ERROR
-NOT_FOUND
-CONFLICT
-RATE_LIMITED
-INTERNAL_ERROR
-```
+### Failures and bounds
 
-Possible error payload:
+Malformed protocol, unknown-tool and argument-schema failures belong to the SDK.
+They do not require a BelovedDev envelope, invocation record or application
+request ID. They cannot execute a use case through the registered callback.
 
-```text
-error
-  code
-  message
-  requestId
-  details?
-```
-
-`details` is reserved for safe structured information such as field-validation errors.
-
-Never expose raw database errors or stack traces.
-
----
-
-# 4. `get_profile`
-
-## Purpose
-
-Return the authoritative developer profile for the authenticated tenant.
-
-## Input
+After SDK validation, shared admission/context/use-case failures return
+isError=true and one JSON text content item. Error results omit structuredContent,
+because the output schema advertises success. For example, the decoded text of
+an application permission failure is:
 
 ```json
-{}
+{
+  "error": {
+    "code": "FORBIDDEN",
+    "message": "The required permission is missing.",
+    "requestId": "77777777-7777-4777-8777-777777777777"
+  }
+}
 ```
 
-No tenant or user identifier is accepted.
+Common application codes are UNAUTHENTICATED, FORBIDDEN, VALIDATION_ERROR,
+NOT_FOUND, CONFLICT, RATE_LIMITED and INTERNAL_ERROR. Active principal resolution
+can itself access the membership repository; permission denial precedes protected
+resource queries. Missing and foreign resource lookups are indistinguishable.
+Cursor integrity/filter disagreement is application VALIDATION_ERROR, not an
+SDK schema failure. Driver/unknown failures become safe INTERNAL_ERROR; raw SQL,
+credentials, paths and stack traces are not returned.
 
-## Output
+Eight executing application slots, no queue, a 30-second response deadline and a
+1 MiB serialized success result apply to every tool. Saturation returns
+RATE_LIMITED; deadline, oversize and output-schema failures return INTERNAL_ERROR.
+Shutdown refuses new admission. These limits do not cancel ongoing SQL or prove
+rollback. Main logs invocation success and failure at info; higher log levels may
+hide them. See [request/lifecycle architecture](architecture.md).
 
-```text
-profile
-  id
-  displayName
-  headline
-  summary
-  location
-  yearsExperience
-  hourlyRate
-  availability
-  skills
-  serviceAreas
-  preferredProjectTypes
-  excludedProjectTypes
-  portfolioUrl
-  githubUrl
+## get_profile
 
-meta
-  requestId
+Read the current tenant's developer profile. Requires profile:read; read-only.
+Tenant scope is taken exclusively from trusted context.
+
+Input: an empty object, with no accepted properties.
+
+Output: profile with id, displayName, headline, summary, location,
+yearsExperience, hourlyRate, availability, skills, serviceAreas,
+preferredProjectTypes, excludedProjectTypes, portfolioUrl and githubUrl; plus
+meta.requestId. availability is a JSON-valued record, not a promised schedule
+schema. URLs and rate are nullable. Missing profile returns NOT_FOUND;
+unauthenticated/forbidden/internal failures follow the shared contract.
+
+### Example invocation
+
+<!-- example:get_profile:request -->
+
+```json
+{
+  "name": "get_profile",
+  "arguments": {}
+}
 ```
 
-## Required Permission
+### Example response DTO
 
-```text
-profile:read
+<!-- example:get_profile:response -->
+
+```json
+{
+  "profile": {
+    "id": "22222222-2222-4222-8222-222222222222",
+    "displayName": "Example Developer",
+    "headline": "TypeScript backend developer",
+    "summary": "Synthetic profile for documentation.",
+    "location": "Example City",
+    "yearsExperience": 5,
+    "hourlyRate": null,
+    "availability": {},
+    "skills": ["TypeScript", "PostgreSQL"],
+    "serviceAreas": ["Backend development"],
+    "preferredProjectTypes": ["backend"],
+    "excludedProjectTypes": [],
+    "portfolioUrl": null,
+    "githubUrl": null
+  },
+  "meta": {
+    "requestId": "77777777-7777-4777-8777-777777777777"
+  }
+}
 ```
 
-## Tenant Scope
+## list_projects
 
-Trusted request context.
+List a tenant-scoped page of projects. Requires projects:read; read-only.
 
-## Side Effects
+| Input           | Constraint                                                                        |
+| --------------- | --------------------------------------------------------------------------------- |
+| status?         | One project status                                                                |
+| clientId?       | UUID filter, still tenant-scoped                                                  |
+| query?          | Trimmed nonempty string, max 200; literal case-insensitive name/summary substring |
+| limit?, cursor? | Shared pagination constraints                                                     |
 
-None.
+Output: projects with id, name, slug, summary, status, stack, startedAt,
+completedAt and client (id/name or null), optional nextCursor and meta.requestId.
+Order is project UUID ASC. The cursor binds tenant, status, clientId and trimmed
+query; query case is preserved in cursor semantics even though matching is
+case-insensitive. Unknown/foreign client filters return an empty page rather
+than disclose ownership. Invalid cursors return VALIDATION_ERROR; other failures
+use the shared contract.
 
-## Failure Behavior
+### Example invocation
 
-- unauthenticated → `UNAUTHENTICATED`
-- missing required profile → `NOT_FOUND`
-- unexpected infrastructure failure → `INTERNAL_ERROR`
+<!-- example:list_projects:request -->
 
-## Audit
-
-No durable mutation audit.
-
-Structured request log only.
-
----
-
-# 5. `list_projects`
-
-## Purpose
-
-List projects available to the authenticated tenant.
-
-## Input
-
-```text
-status?
-clientId?
-query?
-limit?
-cursor?
+```json
+{
+  "name": "list_projects",
+  "arguments": {
+    "status": "active",
+    "limit": 20
+  }
+}
 ```
 
-Suggested limits:
+### Example response DTO
 
-```text
-default limit = 20
-maximum limit = 100
+<!-- example:list_projects:response -->
+
+```json
+{
+  "projects": [
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "name": "Sample Project",
+      "slug": "sample-project",
+      "summary": "Synthetic project context.",
+      "status": "active",
+      "stack": ["TypeScript", "PostgreSQL"],
+      "startedAt": null,
+      "completedAt": null,
+      "client": null
+    }
+  ],
+  "meta": {
+    "requestId": "77777777-7777-4777-8777-777777777777"
+  }
+}
 ```
 
-## Output
+## get_project
 
-```text
-projects[]
-  id
-  name
-  slug
-  summary
-  status
-  client?
-    id
-    name
-  stack
-  startedAt?
-  completedAt?
+Read bounded context for one project. Requires projects:read; read-only.
 
-nextCursor?
+Input: required projectId UUID, with no other fields.
 
-meta
-  requestId
+Output: project summary plus problemStatement, outcome, repositoryUrl,
+productionUrl and portfolioUrl; root client (id/name or null); evidenceSummary
+(id/type/title/summary, at most 20); openBlockers
+(id/title/description/severity/blockedSince, at most 20); recentNotes
+(id/category/content/createdAt, at most 10); and meta.requestId.
+Nullable project dates/URLs are present as null when absent. This is a bounded
+context view, not complete history or an atomic snapshot across all reads.
+Missing and cross-tenant project IDs both return NOT_FOUND; child queries retain
+tenant scope. Other failures use the shared contract.
+
+### Example invocation
+
+<!-- example:get_project:request -->
+
+```json
+{
+  "name": "get_project",
+  "arguments": {
+    "projectId": "11111111-1111-4111-8111-111111111111"
+  }
+}
 ```
 
-## Required Permission
+### Example response DTO
 
-```text
-projects:read
+<!-- example:get_project:response -->
+
+```json
+{
+  "project": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "name": "Sample Project",
+    "slug": "sample-project",
+    "summary": "Synthetic project context.",
+    "status": "active",
+    "stack": ["TypeScript", "PostgreSQL"],
+    "startedAt": null,
+    "completedAt": null,
+    "problemStatement": "Keep project decisions discoverable.",
+    "outcome": "A documented transaction boundary.",
+    "repositoryUrl": null,
+    "productionUrl": null,
+    "portfolioUrl": null
+  },
+  "client": null,
+  "evidenceSummary": [
+    {
+      "id": "44444444-4444-4444-8444-444444444444",
+      "type": "reliability",
+      "title": "Atomic note and audit",
+      "summary": "Synthetic evidence of a transaction boundary."
+    }
+  ],
+  "openBlockers": [
+    {
+      "id": "55555555-5555-4555-8555-555555555555",
+      "title": "Confirm rollout window",
+      "description": "Synthetic open blocker.",
+      "severity": "medium",
+      "blockedSince": "2026-01-10T10:00:00.000Z"
+    }
+  ],
+  "recentNotes": [
+    {
+      "id": "66666666-6666-4666-8666-666666666666",
+      "category": "decision",
+      "content": "Keep the note and audit in one transaction.",
+      "createdAt": "2026-01-10T10:00:00.000Z"
+    }
+  ],
+  "meta": {
+    "requestId": "77777777-7777-4777-8777-777777777777"
+  }
+}
 ```
 
-## Tenant Scope
+## search_project_evidence
 
-All queries use trusted tenant context.
+Retrieve supporting evidence from the current tenant using PostgreSQL full-text
+search. Requires projects:read; read-only. No LLM, embeddings or external calls.
 
-## Side Effects
+| Input           | Constraint                                                                         |
+| --------------- | ---------------------------------------------------------------------------------- |
+| query           | Required trimmed nonempty string, max 1000; parsed by English websearch_to_tsquery |
+| projectIds?     | Nonempty UUID array, max 100                                                       |
+| evidenceTypes?  | Nonempty allowed-type array, max 9                                                 |
+| skills?         | Nonempty array, max 50; each trimmed nonempty string max 100                       |
+| limit?, cursor? | Shared pagination constraints                                                      |
 
-None.
+Each supplied array has any-member semantics within that filter; different
+filters combine with AND. Project/type lists are deduplicated and sorted;
+skills are lowercased, deduplicated and sorted. Skill membership matching is
+exact/case-insensitive, not fuzzy. The trimmed query is fingerprinted without
+case folding. Foreign project filters cannot retrieve foreign evidence.
 
-## Failure Behavior
+Output: results with evidenceId, projectId, projectName, type, title, summary,
+skills, capabilities, businessOutcomes and relevanceScore; optional nextCursor;
+meta.requestId. Order is ts_rank_cd DESC, evidence UUID ASC. The signed cursor
+binds tenant and normalized search/filter fingerprint and preserves PostgreSQL's
+rank text internally. Ranking is retrieval metadata, not fit scoring. Empty
+matches return results=[]. Invalid/tampered/filter-incompatible cursors return
+VALIDATION_ERROR; other failures use the shared contract.
 
-- invalid status/filter → `VALIDATION_ERROR`
-- malformed cursor → `VALIDATION_ERROR`
-- infrastructure failure → `INTERNAL_ERROR`
+### Example invocation
 
-If `clientId` belongs to another tenant, the query must not reveal that fact. Returning an empty result is acceptable for a list filter.
+<!-- example:search_project_evidence:request -->
 
-## Audit
-
-Structured request log only.
-
----
-
-# 6. `get_project`
-
-## Purpose
-
-Retrieve useful full context for one project.
-
-## Input
-
-```text
-projectId
+```json
+{
+  "name": "search_project_evidence",
+  "arguments": {
+    "query": "transaction",
+    "skills": ["PostgreSQL"],
+    "limit": 20
+  }
+}
 ```
 
-## Output
+### Example response DTO
 
-```text
-project
-  id
-  name
-  slug
-  summary
-  problemStatement
-  outcome
-  status
-  stack
-  repositoryUrl?
-  productionUrl?
-  portfolioUrl?
-  startedAt?
-  completedAt?
+<!-- example:search_project_evidence:response -->
 
-client?
-  id
-  name
-
-evidenceSummary[]
-  id
-  type
-  title
-  summary
-
-openBlockers[]
-  id
-  title
-  description
-  severity
-  blockedSince
-
-recentNotes[]
-  id
-  category
-  content
-  createdAt
-
-meta
-  requestId
+```json
+{
+  "results": [
+    {
+      "evidenceId": "44444444-4444-4444-8444-444444444444",
+      "projectId": "11111111-1111-4111-8111-111111111111",
+      "projectName": "Sample Project",
+      "type": "reliability",
+      "title": "Atomic note and audit",
+      "summary": "Synthetic evidence of a transaction boundary.",
+      "skills": ["TypeScript", "PostgreSQL"],
+      "capabilities": ["Transactions"],
+      "businessOutcomes": [],
+      "relevanceScore": 0.5
+    }
+  ],
+  "meta": {
+    "requestId": "77777777-7777-4777-8777-777777777777"
+  }
+}
 ```
 
-The V1 response need not return every historical evidence item or every note.
+## get_blockers
 
-## Required Permission
+Read a page of open blockers. Requires projects:read; read-only.
 
-```text
-projects:read
+Input: optional projectId UUID, optional severity from the blocker enum, and
+shared limit/cursor. No status argument is accepted; resolved blockers are excluded.
+
+Output: blockers with id, projectId, projectName, title, description, severity
+and blockedSince; optional nextCursor; meta.requestId. Order is blockedSince ASC,
+UUID ASC. The cursor binds tenant, projectId and severity and preserves timestamp
+microseconds. Unknown/foreign project filters return an empty page. Invalid
+cursors return VALIDATION_ERROR; other failures use the shared contract.
+
+### Example invocation
+
+<!-- example:get_blockers:request -->
+
+```json
+{
+  "name": "get_blockers",
+  "arguments": {
+    "projectId": "11111111-1111-4111-8111-111111111111",
+    "severity": "medium",
+    "limit": 20
+  }
+}
 ```
 
-## Tenant Scope
+### Example response DTO
 
-Trusted request context.
+<!-- example:get_blockers:response -->
 
-## Side Effects
-
-None.
-
-## Failure Behavior
-
-- missing project → `NOT_FOUND`
-- project owned by another tenant → `NOT_FOUND`
-- infrastructure failure → `INTERNAL_ERROR`
-
-Do not distinguish between nonexistent and cross-tenant resources.
-
-## Audit
-
-Structured request log only.
-
----
-
-# 7. `search_project_evidence`
-
-## Purpose
-
-Find project evidence supporting a skill, capability, business requirement, implementation pattern, or job opportunity.
-
-## Input
-
-```text
-query
-projectIds?
-evidenceTypes?
-skills?
-limit?
-cursor?
+```json
+{
+  "blockers": [
+    {
+      "id": "55555555-5555-4555-8555-555555555555",
+      "title": "Confirm rollout window",
+      "description": "Synthetic open blocker.",
+      "severity": "medium",
+      "blockedSince": "2026-01-10T10:00:00.000Z",
+      "projectId": "11111111-1111-4111-8111-111111111111",
+      "projectName": "Sample Project"
+    }
+  ],
+  "meta": {
+    "requestId": "77777777-7777-4777-8777-777777777777"
+  }
+}
 ```
 
-Suggested constraints:
+## list_opportunities
 
-```text
-query: 1..1000 characters
-default limit: 20
-maximum limit: 100
+List stored opportunities for the current tenant. Requires opportunities:read;
+read-only. It does not import or synchronize job-site data.
+
+| Input           | Constraint                                                                                                                              |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| status?         | One opportunity status                                                                                                                  |
+| source?         | Trimmed/lowercased slug, max 100, pattern ^[a-z0-9]+(?:-[a-z0-9]+)*$; exact match                                                       |
+| query?          | Trimmed/lowercased nonempty string, max 200; literal case-insensitive substring across title, client name, description and project type |
+| limit?, cursor? | Shared pagination constraints                                                                                                           |
+
+No separate skill, project-type, client-name or budget filter is implemented.
+LIKE metacharacters in the query are escaped, not interpreted as patterns.
+
+Output: opportunities with id, source, title, clientName, projectType,
+budgetType, amountMin, amountMax, currency, requiredSkills, preferredSkills,
+status, sourceUrl and publishedAt; optional nextCursor; meta.requestId. Full
+opportunity description/externalId are not returned. Optional stored values are
+nullable output fields. Order is coalesce(publishedAt, createdAt) DESC, UUID DESC.
+The cursor binds tenant and normalized status/source/query semantics. Empty
+matches return opportunities=[]. Invalid/incompatible cursors return
+VALIDATION_ERROR; other failures use the shared contract.
+
+### Example invocation
+
+<!-- example:list_opportunities:request -->
+
+```json
+{
+  "name": "list_opportunities",
+  "arguments": {
+    "status": "reviewing",
+    "source": "manual",
+    "limit": 20
+  }
+}
 ```
 
-## Output
+### Example response DTO
 
-```text
-results[]
-  evidenceId
-  projectId
-  projectName
-  type
-  title
-  summary
-  skills
-  capabilities
-  businessOutcomes
-  relevanceScore
+<!-- example:list_opportunities:response -->
 
-nextCursor?
-
-meta
-  requestId
+```json
+{
+  "opportunities": [
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "source": "manual",
+      "title": "TypeScript backend project",
+      "clientName": null,
+      "projectType": "backend",
+      "budgetType": "fixed",
+      "amountMin": "1000.00",
+      "amountMax": "2000.00",
+      "currency": "USD",
+      "requiredSkills": ["TypeScript"],
+      "preferredSkills": ["PostgreSQL"],
+      "status": "reviewing",
+      "sourceUrl": null,
+      "publishedAt": null
+    }
+  ],
+  "meta": {
+    "requestId": "77777777-7777-4777-8777-777777777777"
+  }
+}
 ```
 
-## Required Permission
+## evaluate_opportunity
 
-```text
-projects:read
+Evaluate one stored opportunity against the current tenant's stored profile and
+at most ten retrieved evidence results. Requires opportunities:evaluate;
+owner/member only. Read-only: no persisted evaluation or mutation audit.
+
+Input: required opportunityId UUID. No profile, tenant, scoring weights or policy
+override can be supplied.
+
+Output: opportunity (id/title/source); fit (overallScore/recommendation); scores
+(skills/projectType/budget/experienceEvidence); matchedSkills; missingSkills;
+strengths/concerns/riskFlags (code/message); relevantEvidence
+(projectId/projectName/evidenceId/title/summary/relevanceScore); evaluationVersion;
+meta.requestId. Scores are integer 0-100 or null where unavailable; budget is
+always null under this model. Recommendations are strong_match, good_match,
+review, weak_match or skip. Version is v1.
+
+Matching uses NFKC, trimming, collapsed whitespace and lowercase. Versioned
+weights are skills 45, project type 20, budget 15 and evidence 20; null dimensions
+leave both numerator and denominator. Required/preferred skill coverage uses
+80/20 when both exist. Base recommendation thresholds are 85/70/55/40, with
+exclusion/required-coverage overrides. Exclusion wins over preference. Budget
+cannot be compared because profile currency is not modeled.
+
+Evidence queries contain bounded quoted OR phrases, prioritize complete required
+skills over preferred skills and remain within 1000 UTF-16 units. Omitted/shortened
+terms or another result page produce evidence_retrieval_incomplete. Incomplete
+retrieval is not proof no other evidence exists; no_portfolio_evidence is withheld
+in that case. Findings describe retrieved coverage, not a full portfolio audit.
+The example score below is the actual v1 policy result for the synthetic profile,
+opportunity and evidence described by the surrounding examples.
+
+Missing/cross-tenant opportunity or missing profile returns NOT_FOUND. Viewers
+receive FORBIDDEN before protected opportunity/profile/evidence queries. Other
+failures follow the shared contract. [Policy source](../packages/domain/src/evaluation-policy-v1.ts)
+and [orchestration](../packages/application/src/use-cases/evaluate-opportunity.ts)
+define the exact findings and overrides.
+
+### Example invocation
+
+<!-- example:evaluate_opportunity:request -->
+
+```json
+{
+  "name": "evaluate_opportunity",
+  "arguments": {
+    "opportunityId": "33333333-3333-4333-8333-333333333333"
+  }
+}
 ```
 
-## Tenant Scope
+### Example response DTO
 
-Trusted request context.
+<!-- example:evaluate_opportunity:response -->
 
-Any project IDs supplied as filters must still be constrained by the authenticated tenant.
-
-## Side Effects
-
-None.
-
-## Search Behavior
-
-V1 search uses:
-
-```text
-PostgreSQL full-text search
-+
-structured filters
+```json
+{
+  "opportunity": {
+    "id": "33333333-3333-4333-8333-333333333333",
+    "title": "TypeScript backend project",
+    "source": "manual"
+  },
+  "fit": {
+    "overallScore": 100,
+    "recommendation": "strong_match"
+  },
+  "scores": {
+    "skills": 100,
+    "projectType": 100,
+    "budget": null,
+    "experienceEvidence": 100
+  },
+  "matchedSkills": ["typescript", "postgresql"],
+  "missingSkills": [],
+  "strengths": [
+    {
+      "code": "all_required_skills_matched",
+      "message": "All required skills are present in the developer profile."
+    },
+    {
+      "code": "preferred_project_type",
+      "message": "The opportunity matches a preferred project type."
+    },
+    {
+      "code": "strong_portfolio_evidence",
+      "message": "Portfolio evidence demonstrates at least 80% of the requested skill coverage."
+    }
+  ],
+  "concerns": [
+    {
+      "code": "budget_not_comparable",
+      "message": "Budget compatibility cannot be scored because the profile rate has no currency."
+    }
+  ],
+  "riskFlags": [],
+  "relevantEvidence": [
+    {
+      "projectId": "11111111-1111-4111-8111-111111111111",
+      "projectName": "Sample Project",
+      "evidenceId": "44444444-4444-4444-8444-444444444444",
+      "title": "Atomic note and audit",
+      "summary": "Synthetic evidence of a transaction boundary.",
+      "relevanceScore": 0.5
+    }
+  ],
+  "evaluationVersion": "v1",
+  "meta": {
+    "requestId": "77777777-7777-4777-8777-777777777777"
+  }
+}
 ```
 
-No embeddings in V1.
+## create_project_note
 
-`relevanceScore` is a search ranking value, not an LLM-generated judgment.
+Append one contextual note and creation audit. Requires project_notes:create;
+owner/member only. It is the sole V1 mutation and makes no external calls.
 
-## Failure Behavior
+| Input          | Constraint                                          |
+| -------------- | --------------------------------------------------- |
+| projectId      | Required UUID belonging to trusted tenant           |
+| category       | Required note category                              |
+| content        | Required nonblank string, 1-10000 UTF-16 units      |
+| idempotencyKey | Required nonblank opaque string, 8-128 UTF-16 units |
 
-- empty/invalid query → `VALIDATION_ERROR`
-- malformed cursor → `VALIDATION_ERROR`
-- infrastructure/search failure → `INTERNAL_ERROR`
+Content and key must be well-formed Unicode without NUL. Both are preserved
+exactly: no trimming, case folding or normalization. Tenant, actor and request
+ID are never accepted from arguments. Archived owned projects remain eligible.
 
-## Audit
+Output: note (id/projectId/category/content/createdAt), created boolean and
+meta.requestId. Tenant, author and idempotency key are not exposed. created=true
+means a new note/audit committed; created=false returns the original committed
+note without another audit.
 
-Structured request log only.
+A READ COMMITTED transaction verifies the tenant-scoped project, attempts INSERT
+with UNIQUE(tenant_id, author_user_id, idempotency_key), and audits only new
+notes. A competing insert waits; a separate lookup observes the winner and
+compares canonical project ID plus exact category/content. Matching retry returns
+original ID/time. Another owned project/category/content with the same scoped
+key returns CONFLICT. Missing/foreign project returns NOT_FOUND before key lookup.
+Request IDs are not part of equality; each retry receives a new invocation ID,
+while the original audit keeps its original request ID.
 
----
+An audit failure rolls back the new note with it. Audit metadata is exactly
+projectId/category, with no content or key. Connection loss near COMMIT is an
+uncertain outcome. Output validation, response-size limits, timeouts or client
+disconnect can also fail after commit. No automatic transaction/tool retry occurs.
+Retry only explicitly under the same tenant/author with the identical payload and
+original key. A new key can duplicate a previously committed note. Authorization
+is checked again on every retry. See the [transaction and retry diagrams](architecture.md#note-creation-and-audit-transaction).
 
-# 8. `get_blockers`
+Schema-invalid arguments are SDK errors; application authorization, NOT_FOUND,
+CONFLICT, cursor-independent validation and infrastructure errors follow the
+shared envelope. Successful output schema validation is not a delivery guarantee.
 
-## Purpose
+### Example invocation
 
-Retrieve unresolved project blockers.
+<!-- example:create_project_note:request -->
 
-## Input
-
-```text
-projectId?
-severity?
-limit?
-cursor?
+```json
+{
+  "name": "create_project_note",
+  "arguments": {
+    "projectId": "11111111-1111-4111-8111-111111111111",
+    "category": "decision",
+    "content": "Keep the note and audit in one transaction.",
+    "idempotencyKey": "portfolio-example-note-001"
+  }
+}
 ```
 
-Default behavior:
+### Example response DTO
 
-```text
-status = open
+<!-- example:create_project_note:response -->
+
+```json
+{
+  "note": {
+    "id": "66666666-6666-4666-8666-666666666666",
+    "projectId": "11111111-1111-4111-8111-111111111111",
+    "category": "decision",
+    "content": "Keep the note and audit in one transaction.",
+    "createdAt": "2026-01-10T10:00:00.000Z"
+  },
+  "created": true,
+  "meta": {
+    "requestId": "77777777-7777-4777-8777-777777777777"
+  }
+}
 ```
 
-Suggested:
-
-```text
-default limit = 20
-maximum limit = 100
-```
-
-## Output
-
-```text
-blockers[]
-  id
-  projectId
-  projectName
-  title
-  description
-  severity
-  blockedSince
-
-nextCursor?
-
-meta
-  requestId
-```
-
-## Required Permission
-
-```text
-projects:read
-```
-
-## Tenant Scope
-
-Trusted request context.
-
-## Side Effects
-
-None.
-
-## Failure Behavior
-
-- invalid severity → `VALIDATION_ERROR`
-- project filter outside tenant → return no matching records or `NOT_FOUND` if implemented as a resource-scoped query; behavior must be deterministic and tested
-- infrastructure failure → `INTERNAL_ERROR`
-
-## Audit
-
-Structured request log only.
-
----
-
-# 9. `list_opportunities`
-
-Implemented in Milestone 5-B through an explicit high-level SDK registration and
-the shared read-only invocation boundary.
-
-## Purpose
-
-List stored freelance or job opportunities.
-
-## Input
-
-```text
-status?
-source?  exact canonical lowercase slug
-query?   literal case-insensitive substring across title, client name,
-         description, and project type
-limit?
-cursor?
-```
-
-Suggested limits:
-
-```text
-default limit = 20
-maximum limit = 100
-```
-
-## Output
-
-```text
-opportunities[]
-  id
-  source
-  title
-  clientName?
-  projectType?
-  budgetType?
-  amountMin?
-  amountMax?
-  currency?
-  requiredSkills
-  preferredSkills
-  status
-  sourceUrl?
-  publishedAt?
-
-nextCursor?
-
-meta
-  requestId
-```
-
-Results order by `coalesce(publishedAt, createdAt) DESC`, then opportunity UUID
-descending. The signed cursor carries the ordering timestamp and UUID and is
-bound to trusted tenant scope plus normalized status, source, and query filters.
-
-## Required Permission
-
-```text
-opportunities:read
-```
-
-## Tenant Scope
-
-Trusted request context.
-
-## Side Effects
-
-None.
-
-## Failure Behavior
-
-- invalid argument schema → MCP SDK protocol-layer error before context or repository access
-- missing trusted principal → `UNAUTHENTICATED`
-- missing `opportunities:read` → `FORBIDDEN`
-- malformed or filter-incompatible cursor → `VALIDATION_ERROR`
-- infrastructure failure → `INTERNAL_ERROR`
-
-## Audit
-
-Structured request log only.
-
----
-
-# 10. `evaluate_opportunity`
-
-Implemented through Milestone 6-B. Input and every output object are strict;
-the only input is the required UUID `opportunityId`. Unknown identity, tenant,
-profile, and scoring configuration fields are SDK-rejected before use-case work.
-
-## Purpose
-
-Evaluate one stored opportunity against the authenticated tenant's developer profile and available project evidence.
-
-## Input
-
-```text
-opportunityId
-```
-
-Do not accept an arbitrary developer profile from MCP input in V1.
-
-## Output
-
-```text
-opportunity
-  id
-  title
-  source
-
-fit
-  overallScore
-  recommendation
-
-scores
-  skills
-  projectType
-  budget (nullable)
-  experienceEvidence
-
-matchedSkills[]
-missingSkills[]
-
-strengths[]
-  code
-  message
-concerns[]
-  code
-  message
-riskFlags[]
-  code
-  message
-
-relevantEvidence[]
-  projectId
-  projectName
-  evidenceId
-  title
-  summary
-  relevanceScore
-
-evaluationVersion
-
-meta
-  requestId
-```
-
-## Recommendation Values
-
-```text
-strong_match
-good_match
-review
-weak_match
-skip
-```
-
-## Required Permission
-
-```text
-opportunities:evaluate
-```
-
-## Tenant Scope
-
-Trusted request context.
-
-The target opportunity, profile, and evidence must all belong to the authenticated tenant.
-
-## Side Effects
-
-None.
-
-## Evaluation Rules
-
-The deterministic application/domain layer may consider:
-
-```text
-required skill match
-preferred skill match
-excluded project types
-preferred project types
-budget compatibility
-relevant portfolio evidence
-missing evidence
-risk flags
-```
-
-The exact weights and thresholds must be versioned and unit-tested when implemented.
-
-Initial version:
-
-```text
-evaluationVersion = "v1"
-```
-
-Milestone 6-A implements this deterministic application result. Values use NFKC,
-trimmed, whitespace-collapsed, lowercase exact matching. Skills, project type,
-budget, and evidence have weights 45/20/15/20; null dimensions are removed from
-both numerator and denominator. Budget is `null` because the developer profile
-rate has no currency.
-
-Evidence retrieval reuses tenant-scoped full-text search with quoted OR terms and
-a limit of 10. Generated queries stay within 1000 characters, prioritize complete
-required skill phrases over preferred phrases, and bound fallback project-type
-or title text. Omitted/shortened terms or a page continuation emit
-`evidence_retrieval_incomplete`; partial retrieval cannot emit
-`no_portfolio_evidence`. Evidence scores describe observed retrieved coverage.
-Search rank is returned as retrieval metadata; structured evidence
-skills determine evidence coverage. Base recommendation thresholds are 85, 70,
-55, and 40. Only excluded project type, zero required coverage, and below-half
-required coverage override the base recommendation. Milestone 6-B registers the
-tool explicitly with these existing semantics and the shared invocation boundary.
-Only owner and member roles receive `opportunities:evaluate`; viewers are denied.
-Success returns JSON text content and matching `structuredContent`, with a
-generated `meta.requestId`. Application failures return `isError: true` and safe
-JSON error text with a request ID, without success `structuredContent`.
-
-## Persistence
-
-Do not persist evaluation results in V1.
-
-## Failure Behavior
-
-- opportunity missing → `NOT_FOUND`
-- cross-tenant opportunity → `NOT_FOUND`
-- developer profile missing → `NOT_FOUND`
-- malformed opportunity data that violates evaluation assumptions → safe `INTERNAL_ERROR` plus diagnostic logging, unless it is a user-correctable validation condition
-- infrastructure failure → `INTERNAL_ERROR`
-
-## Audit
-
-Structured request log only.
-
----
-
-# 11. `create_project_note`
-
-## Purpose
-
-Append a contextual note to a project.
-
-This is the only V1 MCP mutation, implemented through Milestone 7-B.
-
-Milestone 7-A implements the application command and PostgreSQL transaction only.
-Milestone 7-B registers the command explicitly through `McpServer.registerTool()`
-and the shared invocation boundary. Its annotations are `readOnlyHint=false`,
-`destructiveHint=false`, `idempotentHint=true`, and `openWorldHint=false`.
-
-## Input
-
-```text
-projectId
-category
-content
-idempotencyKey
-```
-
-Implemented application constraints (all four fields required; unknown fields rejected):
-
-```text
-content:
-1..10,000 characters
-
-idempotencyKey:
-8..128 characters
-```
-
-`projectId` is a UUID. Content and key must contain a non-whitespace character.
-Both must be well-formed Unicode without NUL characters, so PostgreSQL can
-preserve them without encoding replacement or rejection.
-Lengths are JavaScript UTF-16 lengths. Content and opaque keys are preserved
-exactly, including whitespace and Unicode; there is no trimming, case folding,
-or Unicode normalization. Tenant, author, and request ID come only from trusted
-context. Owners and members receive `project_notes:create`; viewers do not.
-
-Allowed categories:
-
-```text
-general
-decision
-requirement
-client_feedback
-technical
-follow_up
-research
-```
-
-## Application Output (M7-A)
-
-```text
-note
-  id
-  projectId
-  category
-  content
-  createdAt
-
-created
-```
-
-`createdAt` is an ISO timestamp. The application result contains no `meta`.
-The strict MCP success output adds only `meta: { requestId: UUID }`; both text
-content and structuredContent contain that same JSON object. Note objects expose
-only the five documented fields, excluding tenant, author, and idempotency key.
-
-`created` indicates:
-
-```text
-true  = a new note was created
-false = an existing idempotent result was returned
-```
-
-## Required Permission
-
-```text
-project_notes:create
-```
-
-## Tenant Scope
-
-Trusted request context.
-
-The project must belong to the authenticated tenant.
-
-## Side Effects
-
-Creates:
-
-```text
-ProjectNote
-AuditLog
-```
-
-## Transaction
-
-The logical operation must be atomic:
-
-```text
-verify project belongs to tenant
-        ↓
-attempt note INSERT using the unique key
-        ↓
-new note: insert audit | duplicate: read committed note and compare payload
-        ↓
-commit (or roll back on any failure/conflict)
-```
-
-If any step fails:
-
-```text
-rollback
-```
-
-## Idempotency
-
-Database uniqueness:
-
-```text
-UNIQUE(
-  tenant_id,
-  author_user_id,
-  idempotency_key
-)
-```
-
-A safe retry with the same idempotency key returns the previous result.
-
-An idempotency-key collision representing a semantically different operation should produce `CONFLICT` rather than silently changing the previous operation.
-
-Within the tenant/author/key scope, retries compare `projectId`, `category`, and
-`content` with exact equality. A different owned project, category, or content
-returns `CONFLICT`. Project ownership is checked before key lookup: missing or
-foreign projects return `NOT_FOUND`, even when a key already exists. Retries return
-the original note ID and creation time with `created=false` and do not add an
-audit record. Request ID is not part of the comparison.
-
-Every MCP invocation has a fresh generated request ID. On creation, this is also
-the durable audit request ID. A retry's `meta.requestId` identifies the retry
-invocation while the original note/audit remain unchanged.
-
-Project identity uses the verified project's canonical PostgreSQL UUID, so
-uppercase and lowercase UUID spellings resolve to the same operation. Category,
-content, and opaque key comparisons remain exact and case-sensitive.
-
-The PostgreSQL adapter uses `INSERT ... ON CONFLICT DO NOTHING` against the
-existing unique constraint, then a separate READ COMMITTED lookup after a losing
-insert. It does not update the original note or retry failed transactions
-automatically. After an uncertain transport outcome, callers may safely retry
-the exact command with the same key while still authorized.
-
-## Failure Behavior
-
-- unauthenticated → `UNAUTHENTICATED`
-- missing permission → `FORBIDDEN`
-- invalid category/content/key → `VALIDATION_ERROR`
-- project missing or cross-tenant → `NOT_FOUND`
-- conflicting idempotency reuse → `CONFLICT`
-- database failure → rollback + `INTERNAL_ERROR`
-
-Malformed MCP arguments are rejected by the SDK before context resolution or
-application work; they do not require the application envelope or request ID.
-Application errors return `isError=true` and safe JSON text with code, message,
-and request ID, without success structuredContent. Invocation logs contain only
-the shared safe metadata, never note content, opaque keys, or full bodies.
-
-If success output violates the strict MCP schema, the invocation returns a safe
-`INTERNAL_ERROR` without exposing that output. The note/audit transaction may
-already have committed before output validation or response delivery fails.
-After this failure or a transport timeout, retry the exact command with the
-original idempotency key; generating a new key could create a duplicate note.
-The server does not retry automatically. A successful identical retry returns
-`created=false` with a fresh invocation request ID and leaves the original audit
-unchanged.
-
-## Audit
-
-Required.
-
-Suggested audit record:
-
-```text
-action = project_note.created
-resourceType = project_note
-resourceId = <note id>
-requestId = <request id>
-```
-
-Metadata should contain only safe, useful fields.
-
-M7-A stores exactly `{ projectId, category }` as metadata, without note content or
-idempotency keys. Audit insertion occurs in the note transaction; an audit or
-commit failure rolls back both records. Existing historical notes are preserved
-without fabricated backfilled audits. The application result contains `note`
-and `created`; MCP `meta.requestId` is added by the shared invocation boundary in
-M7-B. No automatic transaction or MCP tool retries are introduced.
-
----
-
-# 12. Contract Stability
-
-Once an MCP tool is released, avoid silent incompatible contract changes.
-
-When changing:
-
-- field semantics
-- required inputs
-- output structure
-- scoring behavior
-- pagination semantics
-
-update:
-
-```text
-documentation
-contract tests
-evaluation version where applicable
-```
-
-Prefer additive evolution where practical.
-
-## MCP SDK and application error boundary
-
-All eight implemented tools use the official MCP SDK v2
-`McpServer.registerTool()` API with strict Zod input and success-output schemas.
-
-Invalid protocol requests, unknown tools, and invalid tool argument schemas are
-SDK/protocol-layer failures. The SDK rejects them before the registered callback:
-no BelovedDev use case, trusted-context lookup, or resource repository runs.
-These failures follow SDK response semantics; they do not require a BelovedDev
-application error envelope, application request ID, or invocation log.
-
-After SDK validation, the shared callback generates an application request ID,
-resolves trusted context, executes the use case, validates its success output,
-and records a structured invocation log. Unauthenticated, forbidden, not-found,
-application validation (including cursor integrity), and infrastructure failures
-produce a safe application error as JSON text with `isError: true`.
-Error results omit `structuredContent` because the advertised output schema
-describes success. Success returns matching JSON text and `structuredContent`
-with `meta.requestId`. Neither input schemas nor permissions are relaxed to
-route SDK failures through application code.
-
-`search_project_evidence` follows this same boundary. Its MCP input exposes only
-the user query, project/evidence-type/skill filters, page limit, and opaque cursor.
-Tenant identity, PostgreSQL query controls, relevance positions, fingerprint, and
-search vector remain internal. Its success schema mirrors the application result;
-the tool is read-only and requires `projects:read`.
-
-## Application invocation resource policy (M8-E)
-
-All eight tools share eight executing application slots per stdio process, with
-no waiting queue. Capacity is checked before trusted-context resolution or use
-case execution. Saturation returns the existing safe `RATE_LIMITED` application
-envelope with a new request ID, `isError=true`, and no `structuredContent`.
-SDK protocol/input-schema failures remain outside this application boundary.
-
-An admitted callback has a 30-second application response deadline, including
-context resolution, use-case work, output validation, and serialization. Expiry
-returns existing safe `INTERNAL_ERROR`. It does not cancel work or free its slot:
-the admission/lifecycle lease stays occupied until execution actually settles.
-Late context resolution cannot initiate a new use case. Late execution results
-or rejections are observed but cannot replace the response or generate a second
-invocation log. The invocation log records the response outcome, not delivery
-or proof that underlying work has finished.
-
-Success responses must fit 1 MiB (1,048,576 UTF-8 bytes) when the full MCP
-`CallToolResult` is JSON-serialized. This includes both text `content` and
-`structuredContent`, their property names, JSON escaping, and `meta.requestId`;
-SDK-owned JSON-RPC framing is excluded. Oversize returns safe `INTERNAL_ERROR`
-without truncation or partial structured output. Equality with the limit is
-accepted. Input/output schemas, permissions, and annotations are unchanged.
-
-For `create_project_note`, timeout or oversized/invalid success output never
-proves rollback. An admitted note/audit transaction may commit after the error
-response. Explicit recovery uses the exact original payload and idempotency key;
-capacity may still be occupied and return `RATE_LIMITED` until execution settles.
-No automatic mutation retries, new error categories, or transport changes are
-introduced. Node timers require an available event loop; elapsed-time checks
-reject overdue success even if synchronous work delayed the timer callback.
+## Contract evolution
+
+Examples do not authorize changes to these contracts. Review strict schemas,
+application rules, SQL constraints and tests together when changing field
+semantics, filters or scoring; version deterministic policy changes explicitly.
+See [case-study verification](case-study.md#verification),
+[security disclosure](security.md), and [domain specification](domain-model.md).

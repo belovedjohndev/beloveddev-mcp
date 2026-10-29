@@ -1,5 +1,21 @@
 # BelovedDev MCP V1 — Implementation Plan
 
+## Current baseline and documentation scope
+
+M9-A documents origin/main at
+[2e56b7a2aa61fa7b8bfa8102335a8e87df8338e7](https://github.com/belovedjohndev/beloveddev-mcp/commit/2e56b7a2aa61fa7b8bfa8102335a8e87df8338e7).
+All eight V1 tools, local stdio lifecycle/readiness/limits/packaging, and M8-H1/H2
+migration/recovery are merged. M8-G security maintenance remains in
+[open draft PR #2](https://github.com/belovedjohndev/beloveddev-mcp/pull/2), not in
+this baseline. Known dependency/native-image findings and deployment decisions
+remain; M8 is not declared complete and production deployment is not approved.
+
+The milestone sections below retain historical delivery boundaries: a statement
+that an early slice deferred a capability is not a claim that it remains absent.
+Current behavior is described by the [README](../README.md),
+[implemented architecture](architecture.md), [tool reference](mcp-tool-contracts.md)
+and [security disclosure](security.md).
+
 ## 1. Delivery Strategy
 
 Build V1 as a sequence of small milestones.
@@ -828,38 +844,48 @@ recovery and WAL/PITR are not implemented or guaranteed by this slice.
 
 ---
 
-## 11. Milestone 9 — Portfolio Documentation
+## 11. Milestone 9 - Portfolio documentation
 
-### Goal
+### M9-A scope
 
-Make the repository explain its engineering decisions without requiring private context.
+Documentation only, in the separate BelovedDev-MCP-M9 worktree on
+feat/m9-portfolio based on origin/main. No M8-G code, dependency change,
+authentication, tool, migration, domain feature or deployment is imported.
 
-### README Should Explain
+Deliverables:
 
-```text
-problem
-product goal
-architecture
-MCP tool catalog
-domain model
-security model
-tenant isolation
-authorization
-safe side effects
-idempotency
-failure behavior
-search strategy
-opportunity evaluation
-testing strategy
-observability
-deployment
-example AI interactions
-future integrations
-```
+| Document                                | Purpose                                                                                                               |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| [README](../README.md)                  | Problem, stack, eight tools, setup, direct Node launcher, security/failure model and roadmap                          |
+| [Architecture](architecture.md)         | Six source-grounded Mermaid diagrams and package/operational boundaries                                               |
+| [Tool reference](mcp-tool-contracts.md) | Actual inputs, outputs, permissions, tenant scope, side effects, errors and eight synthetic invocation/response pairs |
+| [Case study](case-study.md)             | Concise portfolio presentation plus engineering decisions, trade-offs, evidence and lessons                           |
+| [Security disclosure](security.md)      | Main-branch trust model, limitations, dependency/image blockers and separate draft status                             |
 
-### Exit Criteria
+The diagrams show system architecture, request lifecycle, tenant authorization,
+note/audit transaction, idempotency retry and administrative migration/recovery.
+Examples use synthetic records only and are checked against existing application
+use cases and strict tool schemas. They are not an onboarding dataset or a claim
+that an AI model, remote deployment or client integration was tested.
 
-A technical reviewer can understand why the project is production-oriented rather than a thin MCP demo.
+### Verification and evidence discipline
+
+Run npm run format:check, npm run verify and git diff --check. Check documentation
+links/anchors, source paths, script names, exact launcher marker, enum/field names
+and examples. Preserve original migration bytes. Reused PostgreSQL/container
+results must identify the exact baseline commit and CI run; see the
+[case-study ledger](case-study.md#verification). No unsupported security or
+production claim follows from green functional tests. Documentation examples
+receive additional schema/SDK checks without adding application features.
+
+### Remaining work
+
+M9-A makes implemented engineering reviewable; it does not complete M8 security
+or authorize a release. M8-G requires separate supported remediation and artifact
+review. Operators still need approved secret/update/monitoring/recovery ownership,
+RPO/RTO, storage and cutover decisions. Any remote authentication or external
+integration requires its own specification. No HTTP transport, OAuth, LLM scoring,
+new mutation or future integration is started by this documentation slice.
 
 ---
 
@@ -879,9 +905,9 @@ npm run verify
 
 `verify` checks formatting, lint, production/test types, the build, and Vitest.
 The test and lint commands build package declarations first so they work after a
-clean install. CI additionally starts PostgreSQL via Docker Compose and executes
-an authenticated `SELECT 1`. See the README for local environment setup and
-`db:up`/`db:down` commands.
+clean install. Current CI applies migrations, runs verify:all against disposable
+PostgreSQL test databases, checks generated migration drift, and runs a separate
+container-smoke job. See the README for separated runtime/administrative setup.
 
 Milestone 1 adds `npm run test:integration` and `npm run verify:all`.
 The latter runs the existing checks, validates Drizzle migration history, and runs
