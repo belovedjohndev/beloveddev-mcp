@@ -1,5 +1,10 @@
+import { AssertionError } from 'node:assert';
 import { describe, expect, it } from 'vitest';
-import { cleanupTestResources, TestCleanupError } from '../src/test-database.js';
+import {
+  cleanupTestResources,
+  TestCleanupError,
+  withTestResourceCleanup,
+} from '../src/test-database.js';
 
 describe('test resource cleanup orchestration', () => {
   it('attempts every independent step and reports every failing stage', async () => {
@@ -72,5 +77,117 @@ describe('test resource cleanup orchestration', () => {
         },
       ]),
     ).rejects.toMatchObject({ failures: [{ stage: 'source_database.database', code: '57014' }] });
+  });
+});
+
+describe('assertion-safe owned resource teardown', () => {
+  it('preserves assertion identity after every cleanup attempt', async () => {
+    const assertion = new AssertionError({
+      message: 'original assertion',
+      actual: false,
+      expected: true,
+      operator: 'strictEqual',
+    });
+    const visited: string[] = [];
+    await expect(
+      withTestResourceCleanup(() => {
+        throw assertion;
+      }, [
+        {
+          stage: 'transport',
+          run: () => {
+            visited.push('transport');
+          },
+        },
+        {
+          stage: 'database',
+          run: () => {
+            visited.push('database');
+          },
+        },
+        {
+          stage: 'environment',
+          run: () => {
+            visited.push('environment');
+          },
+        },
+      ]),
+    ).rejects.toBe(assertion);
+    expect(visited).toEqual(['transport', 'database', 'environment']);
+  });
+  it('retains the original asynchronous assertion and every safe cleanup failure', async () => {
+    const assertion = new Error('original async assertion');
+    const visited: string[] = [];
+    const error: unknown = await withTestResourceCleanup(
+      () => Promise.reject(assertion),
+      [
+        {
+          stage: 'transport',
+          run: () => {
+            visited.push('transport');
+            throw new Error('private transport secret');
+          },
+        },
+        {
+          stage: 'database',
+          run: () => {
+            visited.push('database');
+            return Promise.reject(new Error('private database secret'));
+          },
+        },
+        {
+          stage: 'revocation',
+          run: () => {
+            visited.push('revocation');
+          },
+        },
+        {
+          stage: 'environment',
+          run: () => {
+            visited.push('environment');
+          },
+        },
+      ],
+    ).catch((error: unknown) => error);
+    expect(error).toBeInstanceOf(AggregateError);
+    if (!(error instanceof AggregateError)) throw new Error('Expected aggregate failure.');
+    expect(error.errors[0]).toBe(assertion);
+    expect(error.errors[1]).toMatchObject({
+      failures: [
+        { stage: 'transport', code: 'UNKNOWN' },
+        { stage: 'database', code: 'UNKNOWN' },
+      ],
+    });
+    expect(String(error.errors[1])).not.toContain('private');
+    expect(visited).toEqual(['transport', 'database', 'revocation', 'environment']);
+  });
+  it('reports cleanup failure even when assertions pass and never retries it', async () => {
+    let attempts = 0,
+      restored = false;
+    await expect(
+      withTestResourceCleanup(
+        () => true,
+        [
+          {
+            stage: 'fixture',
+            run: () => {
+              attempts++;
+              throw new Error('private failure');
+            },
+          },
+          {
+            stage: 'environment',
+            run: () => {
+              restored = true;
+            },
+          },
+        ],
+      ),
+    ).rejects.toBeInstanceOf(TestCleanupError);
+    expect(attempts).toBe(1);
+    expect(restored).toBe(true);
+  });
+  it('returns successful values after successful cleanup', async () => {
+    expect(await withTestResourceCleanup(() => 42, [])).toBe(42);
   });
 });

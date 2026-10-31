@@ -1,4 +1,5 @@
-﻿import { randomUUID } from 'node:crypto';
+import { withTestResourceCleanup } from '@beloveddev/test-support/test-database';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { McpServer } from '@modelcontextprotocol/server';
@@ -79,11 +80,26 @@ beforeEach(() => {
   vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Forbidden provider network request.'));
 });
 afterEach(async () => {
-  expect(globalThis.fetch).not.toHaveBeenCalled();
-  vi.useRealTimers();
-  vi.unstubAllEnvs();
-  for (const resource of resources.splice(0)) await resource.close();
+  const owned = resources.splice(0);
+  await withTestResourceCleanup(() => {
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  }, [
+    {
+      stage: 'timers',
+      run: () => {
+        vi.useRealTimers();
+      },
+    },
+    ...owned.map((resource) => ({ stage: 'provider_resource', run: () => resource.close() })),
+    {
+      stage: 'environment',
+      run: () => {
+        vi.unstubAllEnvs();
+      },
+    },
+  ]);
 });
+
 const request: ModelRequest = {
   responseSchema: z.toJSONSchema(actionSchema),
   tools: readOnlyTools.map((name) => ({
@@ -803,8 +819,13 @@ describe('mock OpenAI Responses boundary', () => {
         },
         new AbortController().signal,
       ),
-    ).rejects.toThrow('provider_configuration');
+    ).rejects.toMatchObject({
+      name: 'Error',
+      code: 'provider_configuration',
+      message: 'provider_configuration',
+    });
     expect(c.transport.request).not.toHaveBeenCalled();
+    expect(c.credential).not.toHaveBeenCalled();
     const g = await gateway();
     const d = control([
       response({ ...envelope(), usage: { ...usage, input_tokens: 801, total_tokens: 851 } }),

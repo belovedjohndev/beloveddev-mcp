@@ -83,6 +83,11 @@ export async function migrateDatabase(
     socket.destroy();
     rejectFatal(failure);
   };
+  // Active-query errors bypass Client's error event. Preserve the server's
+  // transaction timeout before a generic connection-close event can win.
+  client.connection.on('errorMessage', (error: unknown) => {
+    if (sqlState(error) === '25P04') stop('OPERATION_TIMEOUT');
+  });
   client.on('error', (error: unknown) =>
     stop(sqlState(error) === '25P04' ? 'OPERATION_TIMEOUT' : 'CONNECTION'),
   );

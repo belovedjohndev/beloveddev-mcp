@@ -1,3 +1,4 @@
+import { ProcessDiagnostics, probeOptions } from '../../test-support/test/process-diagnostics.js';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
@@ -19,7 +20,12 @@ import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotoc
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseTestDatabaseUrl } from '@beloveddev/infrastructure/environment';
 import { auditLogs, projectEvidence, projectNotes, projects } from '@beloveddev/database/schema';
-import { createTestDatabase, type TestDatabase } from '@beloveddev/test-support/test-database';
+import {
+  createTestDatabase,
+  cleanupTestResources,
+  withTestResourceCleanup,
+  type TestDatabase,
+} from '@beloveddev/test-support/test-database';
 import {
   projectInput,
   removeTenantFixtures,
@@ -69,6 +75,17 @@ function safeError(result: CallToolResult) {
   return safeErrorSchema.parse(JSON.parse(content.text)).error;
 }
 
+const activeRawServers = new Set<() => Promise<number | null>>();
+function closeRawServers() {
+  return cleanupTestResources(
+    [...activeRawServers].map((close) => ({
+      stage: 'raw_stdio_process',
+      run: async () => {
+        await close();
+      },
+    })),
+  );
+}
 // Raw JSON-RPC verifies every stdout line, including discovery-to-legacy fallback.
 const responseSchema = z.object({
   jsonrpc: z.literal('2.0'),
@@ -81,13 +98,26 @@ function rawServer(
   env: Record<string, string>,
   launch: { command?: string; args?: string[]; cwd?: string } = {},
 ) {
+  const diagnostic = new ProcessDiagnostics(
+    expect.getState().currentTestName ?? 'stdio subprocess',
+  );
+  const probe = probeOptions(env);
+  diagnostic.mark('spawn_called');
   const child = spawn(launch.command ?? process.execPath, launch.args ?? [entrypoint], {
     cwd: launch.cwd ?? tmpdir(),
-    env,
-    stdio: 'pipe',
+    env: probe.env,
+    stdio: probe.ipc ? ['pipe', 'pipe', 'pipe', 'ipc'] : 'pipe',
     windowsHide: true,
   });
-  const lines = createInterface({ input: child.stdout });
+  const { stdin, stdout, stderr: stderrStream } = child;
+  if (!stdin || !stdout || !stderrStream) {
+    child.kill('SIGKILL');
+    throw new Error('Owned subprocess pipes unavailable.');
+  }
+  child.once('spawn', () => diagnostic.mark('spawned'));
+  child.on('message', (message: unknown) => diagnostic.message(message));
+  child.once('error', () => diagnostic.mark('spawn_error'));
+  const lines = createInterface({ input: stdout });
   const failures: unknown[] = [];
   const output: string[] = [];
   let stderr = '';
@@ -95,6 +125,7 @@ function rawServer(
   const pending = new Map<
     number,
     {
+      method: string;
       resolve: (response: Response) => void;
       reject: (error: Error) => void;
     }
@@ -103,17 +134,28 @@ function rawServer(
     output.push(line);
     try {
       const response = responseSchema.parse(JSON.parse(line));
+      diagnostic.mark('response');
+      diagnostic.response(pending.get(response.id)?.method ?? 'other', response.error);
       pending.get(response.id)?.resolve(response);
     } catch (error: unknown) {
+      diagnostic.mark('protocol_invalid');
       failures.push(error);
     }
   });
-  child.stderr.on('data', (chunk: Buffer) => {
+  stderrStream.on('data', (chunk: Buffer) => {
     stderr += chunk.toString();
+    diagnostic.stderr(chunk.toString());
   });
   const exited = new Promise<number | null>((resolve, reject) => {
     // Wait for pipe closure as well as exit so assertions see the final stderr records.
-    child.once('close', resolve);
+    child.once('close', (code, signal) => {
+      diagnostic.exit(code, signal);
+      if (code === null) diagnostic.mark('process_terminated');
+      else if (code !== 0) diagnostic.mark('process_exit_nonzero');
+      diagnostic.mark('closed');
+      diagnostic.publish();
+      resolve(code);
+    });
     child.once('error', reject);
   });
   void exited.then(
@@ -131,6 +173,7 @@ function rawServer(
         exited,
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => {
+            diagnostic.mark('cleanup_timeout');
             child.kill('SIGKILL');
             reject(new Error('MCP process did not exit within its shutdown deadline'));
           }, 18_000);
@@ -145,6 +188,16 @@ function rawServer(
       lines.close();
     }
   }
+  const close = async () => {
+    diagnostic.mark('close_requested');
+    stdin.end();
+    return waitForExit();
+  };
+  activeRawServers.add(close);
+  void exited.then(
+    () => activeRawServers.delete(close),
+    () => activeRawServers.delete(close),
+  );
   return {
     failures,
     output,
@@ -152,13 +205,25 @@ function rawServer(
       return stderr;
     },
     async request(method: string, params?: Record<string, unknown>) {
+      diagnostic.mark(
+        method === 'server/discover'
+          ? 'discovery_probe_sent'
+          : method === 'initialize'
+            ? 'initialize_sent'
+            : method === 'tools/list'
+              ? 'discovery_sent'
+              : 'tool_sent',
+      );
       const id = nextId++;
       let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
         return await new Promise<Response>((resolve, reject) => {
-          pending.set(id, { resolve, reject });
-          timeout = setTimeout(() => reject(new Error('Timed out waiting for MCP response')), 8000);
-          child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+          pending.set(id, { method, resolve, reject });
+          timeout = setTimeout(() => {
+            diagnostic.mark('response_timeout');
+            reject(new Error('Timed out waiting for MCP response'));
+          }, 8000);
+          stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
         });
       } finally {
         clearTimeout(timeout);
@@ -166,19 +231,16 @@ function rawServer(
       }
     },
     notify(method: string) {
-      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method }) + '\n');
+      stdin.write(JSON.stringify({ jsonrpc: '2.0', method }) + '\n');
     },
     endInput() {
-      child.stdin.end();
+      stdin.end();
     },
     signal(signal: NodeJS.Signals) {
       child.kill(signal);
     },
     waitForExit,
-    async close() {
-      child.stdin.end();
-      return waitForExit();
-    },
+    close,
   };
 }
 
@@ -278,7 +340,15 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
     }
   });
   afterEach(async () => {
-    if (tenants) await removeTenantFixtures(database.admin.db, tenants);
+    await cleanupTestResources([
+      { stage: 'raw_stdio_processes', run: closeRawServers },
+      {
+        stage: 'tenant_rows',
+        run: async () => {
+          if (tenants) await removeTenantFixtures(database.admin.db, tenants);
+        },
+      },
+    ]);
   });
   afterAll(async () => {
     await database?.close();
@@ -678,7 +748,7 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
       const envPath = join(directory, '.env');
       const appsLink = join(directory, 'apps');
       let server: ReturnType<typeof rawServer> | undefined;
-      try {
+      await withTestResourceCleanup(async () => {
         writeFileSync(
           envPath,
           [
@@ -749,16 +819,33 @@ describe('compiled MCP stdio composition with PostgreSQL', () => {
         expect(spoof.error).toBeUndefined();
         expect(spoof.result).toMatchObject({ isError: true });
         expect(spoof.result).not.toHaveProperty('structuredContent');
-      } finally {
-        try {
-          if (server !== undefined) expect(await server.close()).toBe(0);
-        } finally {
-          // Unlink only the junction itself; never recurse into the real repository.
-          if (existsSync(appsLink)) unlinkSync(appsLink);
-          if (existsSync(envPath)) unlinkSync(envPath);
-          rmdirSync(directory);
-        }
-      }
+      }, [
+        {
+          stage: 'launcher_process',
+          run: async () => {
+            if (server !== undefined) expect(await server.close()).toBe(0);
+          },
+        },
+        // Unlink only the owned junction, never recurse into the real repository.
+        {
+          stage: 'launcher_junction',
+          run: () => {
+            if (existsSync(appsLink)) unlinkSync(appsLink);
+          },
+        },
+        {
+          stage: 'launcher_environment',
+          run: () => {
+            if (existsSync(envPath)) unlinkSync(envPath);
+          },
+        },
+        {
+          stage: 'launcher_directory',
+          run: () => {
+            rmdirSync(directory);
+          },
+        },
+      ]);
       if (server === undefined) throw new Error('Launcher did not start');
       expect(server.failures).toEqual([]);
       expect(server.output).toHaveLength(4);
@@ -986,9 +1073,10 @@ describe('compiled project-note MCP mutation with PostgreSQL', () => {
     tenants = await seedTwoTenants(database.admin.db);
   });
   afterEach(async () => {
-    try {
-      const closed = await Promise.allSettled(sessions.map(({ client }) => client.close()));
-      for (const result of closed) expect(result.status).toBe('fulfilled');
+    await withTestResourceCleanup(async () => {
+      await cleanupTestResources(
+        sessions.map(({ client }) => ({ stage: 'sdk_client', run: () => client.close() })),
+      );
       for (const session of sessions) {
         expect(session.errors).toEqual([]);
         expect(session.stderr).not.toContain('MCP_STDIO_SENSITIVE');
@@ -996,9 +1084,15 @@ describe('compiled project-note MCP mutation with PostgreSQL', () => {
         expect(session.stderr).not.toContain(secret);
         expect(session.stderr).not.toContain(database.runtimeUrl);
       }
-    } finally {
-      if (tenants) await removeTenantFixtures(database.admin.db, tenants);
-    }
+    }, [
+      { stage: 'raw_stdio_processes', run: closeRawServers },
+      {
+        stage: 'tenant_rows',
+        run: async () => {
+          if (tenants) await removeTenantFixtures(database.admin.db, tenants);
+        },
+      },
+    ]);
   });
   afterAll(async () => {
     await database?.close();
@@ -1084,8 +1178,16 @@ describe('compiled project-note MCP mutation with PostgreSQL', () => {
       server.notify('notifications/initialized');
       return server;
     } catch (error: unknown) {
-      await server.close();
-      throw error;
+      return withTestResourceCleanup(() => {
+        throw error;
+      }, [
+        {
+          stage: 'raw_stdio_process',
+          run: async () => {
+            await server.close();
+          },
+        },
+      ]);
     }
   }
   async function backend(applicationName: string, state: 'idle' | 'blocked') {
