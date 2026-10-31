@@ -368,6 +368,66 @@ controls. Local cancellation and reservations cannot guarantee final provider bi
 See the [M9-C2A specification](docs/m9-c2a-provider-spec.md) for verified boundaries
 and remaining limitations. M8-G isolation and release blockers are unchanged.
 
+## Secure live-provider readiness (offline verification)
+
+M9-C2A validates mocked provider contracts. M9-C2B1 adds the guarded network path
+and tests it offline. M9-C2B2 is future real-model evaluation with separate owner
+authorization and a spending limit. No real LLM results are claimed here.
+
+The network adapter accepts only the fixed OpenAI Responses endpoint, using a
+private HTTPS agent, bundled CAs, hostname verification, TLS 1.3, no proxies,
+redirects or retries, and bounded headers/body/deadlines. It requires a signed,
+invocation-specific Ed25519 approval verified against an independently trusted
+owner public key. Short-lived opaque capabilities and single-use body-bound
+reservation permits cannot be supplied through model/scenario arguments.
+
+Ordinary eval, eval:agent and CI remain unable to execute live providers. There is
+no live launcher, owner key/approval loader, API-key environment lookup or enable
+flag. eval:provider:test runs existing mocks plus intercepted native-HTTPS controls;
+real sockets/fetch are prohibited. Version-3 readiness reports separate offline control status, token-budget preflight
+and overall live readiness. Overall readiness remains blocked; reports contain
+only safe counts, estimates and fixed blocker codes.
+
+The pinned development-only js-tiktoken encoder uses o200k_base with estimation
+margin and separately approved framing overhead. Existing 4096-token scenario
+limits remain; oversized catalog/history is rejected before credentials or network.
+The representative full catalog estimates 11733 input + 1024 framing + 256 output
+tokens (13013 total), exceeding that ceiling. Full live scenarios remain blocked
+until B2 approves a budget or prompt-contract change.
+Reservations are never refunded, and missing/late usage remains unknown. These
+local controls do not guarantee the provider invoice; account billing controls
+remain necessary.
+
+The initial explicit compatibility profile is gpt-4.1-mini-2025-04-14, documented
+for Responses/Structured Outputs without reasoning. It is deprecated, with
+shutdown scheduled for January 14, 2027; approval checks refuse it at that date.
+This is not a default model choice or proof of account availability. Actual API
+compatibility, token framing, latency, TLS handshake and billing remain unverified.
+
+Before B2, the owner must approve the exact available model/profile, protected
+signing-key and approval provisioning, current pricing, synthetic fixtures,
+call/token/cost limits and account billing controls. Any catalog-budget mismatch
+needs an explicit reviewed decision; no limits or schemas are silently weakened.
+Process-local approval replay checks do not replace operational protection across
+process restarts. See the [B1 specification](docs/m9-c2b1-live-readiness-spec.md).
+Existing application authentication, tenant isolation, MCP tools and M8-G release
+blockers are unchanged. No billable calls are part of B1.
+
+B1 source-review repair (M9-C2B1R) binds each signed approval to an opaque
+fixture created by the trusted synthetic PostgreSQL setup, its data-manifest
+digest, and one canonical scenario's digest and exact inventory. The approved
+runner accepts no arbitrary prompt or MCP client. It owns independent bounded
+cleanup and revokes the grant in a final step on success or failure. Closed or
+revoked grants cannot create transports or send requests. One approval covers
+exactly one scenario; a suite requires separately approved invocations.
+
+Replay protection remains process-local. A persistent atomic replay store is
+required before C2B2, together with an explicitly approved active model (the
+current snapshot is deprecated), token/cost decisions and protected owner
+provisioning. Offline JSON Schema subset validation does not prove live API
+acceptance. See the [repair specification](docs/m9-c2b1r-security-repair-spec.md).
+No live provider calls are authorized by this repair.
+
 ## Workspace and documentation
 
 ```text
@@ -398,3 +458,28 @@ Additional specifications: [product](docs/product-spec.md), [domain](docs/domain
   Evidence retrieval is bounded and reports incomplete retrieval explicitly.
 - No job-site/email/calendar integration, proposal submission, vector search,
   background worker, UI, or mutation beyond note creation is implemented.
+
+### M9-C2B1S: request-bound authorization (offline)
+
+The [request-binding repair](docs/m9-c2b1s-request-binding-spec.md) requires a private
+runner-owned execution lease and a one-use authorization for each exact model
+request. A LiveGrant alone cannot authorize provider calls. Turns bind the canonical
+scenario, discovered tools, actual MCP observations, transcript, adapter/model and
+remaining budgets. The native transport still requires a separate body-bound,
+one-use HTTP permit. No live API requests or LLM performance results are included.
+
+Synthetic live-evaluation fixture setup additionally requires an explicitly approved
+test cluster: literal loopback address and explicit port, postgres control database,
+pinned PostgreSQL system identifier, and an operator-installed database comment
+`beloveddev.synthetic-evaluation-cluster:<UUID>`. Trusted bootstrap supplies
+`TEST_CLUSTER_SYSTEM_IDENTIFIER` and `TEST_CLUSTER_MARKER` alongside the private
+`TEST_DATABASE_URL`; these are test configuration, not model input or live approval.
+The fixture gate verifies this identity read-only before any fixture database/role
+creation and rechecks it on use. It never marks an arbitrary target itself. CI marks
+only its dedicated disposable test service. Local verification must use a separately
+owned disposable cluster; never install this marker on a shared or production server.
+
+C2B2 remains blocked: the measured 13,013-token request exceeds the unchanged
+4,096-token limit; replay protection is process-local; the current model snapshot
+is deprecated. Durable replay storage, an active model and owner-approved budgets
+require separate review. Ordinary evaluation commands remain offline.

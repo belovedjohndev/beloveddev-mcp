@@ -1,10 +1,15 @@
+import { ProcessDiagnostics, probeOptions } from '../../test-support/test/process-diagnostics.js';
 import { spawn } from 'node:child_process';
 import { createServer, type Socket } from 'node:net';
 import { setTimeout as pause } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createTestDatabase } from '@beloveddev/test-support/test-database';
+import {
+  createTestDatabase,
+  cleanupTestResources,
+  withTestResourceCleanup,
+} from '@beloveddev/test-support/test-database';
 import { parseTestDatabaseUrl } from '@beloveddev/infrastructure/environment';
 import type { DatabaseConnection } from '../src/client.js';
 import { migrateDatabase, MIGRATION_LOCK, parseMigrationEnvironment } from '../src/migrate.js';
@@ -19,6 +24,11 @@ function launch(url: string | undefined, extra: Record<string, string> = {}, sig
   for (const name of Object.keys(env)) {
     if (name.startsWith('DATABASE_MIGRATION_')) delete env[name];
   }
+  const diagnostic = new ProcessDiagnostics(
+    expect.getState().currentTestName ?? 'migration subprocess',
+  );
+  const probe = probeOptions(env);
+  diagnostic.mark('spawn_called');
   const child = spawn(
     process.execPath,
     [
@@ -33,15 +43,18 @@ function launch(url: string | undefined, extra: Record<string, string> = {}, sig
     {
       cwd: root,
       env: {
-        ...env,
+        ...probe.env,
         ...(url === undefined ? {} : { DATABASE_MIGRATION_URL: url }),
         DATABASE_MIGRATION_OPERATION_TIMEOUT_MS: '12000',
         ...extra,
       },
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe', ...(signalEvents ? ['ipc' as const] : [])],
+      stdio: ['ignore', 'pipe', 'pipe', ...(signalEvents || probe.ipc ? ['ipc' as const] : [])],
     },
   );
+  child.once('spawn', () => diagnostic.mark('spawned'));
+  child.on('message', (message: unknown) => diagnostic.message(message));
+  child.once('error', () => diagnostic.mark('spawn_error'));
   let stdout = '';
   let stderr = '';
   child.stdout?.on('data', (chunk: Buffer) => {
@@ -49,14 +62,24 @@ function launch(url: string | undefined, extra: Record<string, string> = {}, sig
   });
   child.stderr?.on('data', (chunk: Buffer) => {
     stderr += chunk.toString();
+    diagnostic.stderr(chunk.toString());
   });
-  const watchdog = setTimeout(() => child.kill('SIGKILL'), 17_000);
+  const watchdog = setTimeout(() => {
+    diagnostic.mark('watchdog');
+    child.kill('SIGKILL');
+  }, 17_000);
   const done = new Promise<{ code: number | null; stdout: string; stderr: string }>(
     (resolve, reject) => {
       child.once('error', reject);
-      child.once('close', (code) => resolve({ code, stdout, stderr }));
+      child.once('close', (code) => {
+        if (code === null) diagnostic.mark('process_terminated');
+        else if (code !== 0) diagnostic.mark('process_exit_nonzero');
+        resolve({ code, stdout, stderr });
+      });
     },
   ).finally(() => {
+    diagnostic.mark('closed');
+    diagnostic.publish();
     clearTimeout(watchdog);
     active.delete(result);
   });
@@ -66,8 +89,21 @@ function launch(url: string | undefined, extra: Record<string, string> = {}, sig
 }
 
 afterEach(async () => {
-  for (const process of active) process.child.kill('SIGKILL');
-  await Promise.allSettled([...active].map((process) => process.done));
+  const owned = [...active];
+  await cleanupTestResources([
+    ...owned.map((process) => ({
+      stage: 'migration_process_signal',
+      run: () => {
+        process.child.kill('SIGKILL');
+      },
+    })),
+    ...owned.map((process) => ({
+      stage: 'migration_process_close',
+      run: async () => {
+        await process.done;
+      },
+    })),
+  ]);
 });
 
 async function waitFor<T>(probe: () => Promise<T | undefined> | T | undefined): Promise<T> {
@@ -208,6 +244,45 @@ describe('serialized administrative migration CLI against PostgreSQL 18', () => 
         barrier.release();
         await Promise.allSettled([first.done, ...(second === undefined ? [] : [second.done])]);
       }
+    });
+  });
+
+  it('preserves a server transaction timeout before the generic connection-close event', async () => {
+    await emptyDatabase(async (admin, url) => {
+      const holder = await admin.pool.connect();
+      const configuration = parseMigrationEnvironment({
+        DATABASE_MIGRATION_URL: url,
+        DATABASE_MIGRATION_OPERATION_TIMEOUT_MS: '12000',
+      });
+      await withTestResourceCleanup(async () => {
+        await holder.query('SELECT pg_advisory_lock($1::int,$2::int)', [...MIGRATION_LOCK]);
+        // A real server timeout wins while the session waits on this database's lock.
+        // Only this test client gets the shorter server limit; the application bound is unchanged.
+        await expect(
+          migrateDatabase({
+            ...configuration,
+            connection: {
+              ...configuration.connection,
+              options: (configuration.connection.options ?? '') + ' -c transaction_timeout=200',
+            },
+          }),
+        ).rejects.toMatchObject({ category: 'OPERATION_TIMEOUT' });
+      }, [
+        {
+          stage: 'advisory_unlock',
+          run: async () => {
+            await holder.query('SELECT pg_advisory_unlock_all()');
+          },
+        },
+        {
+          stage: 'held_client',
+          run: () => {
+            holder.release(true);
+          },
+        },
+      ]);
+      await noSessions(admin);
+      expect((await launch(url).done).code).toBe(0);
     });
   });
 

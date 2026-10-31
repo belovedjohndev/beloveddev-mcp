@@ -5,11 +5,15 @@ const count = z.number().int().nonnegative().max(1_000_000);
 const positive = z.number().int().min(1).max(1_000_000);
 export const exactModelSchema = z.string().regex(/^[a-z0-9][a-z0-9.-]{0,90}-\d{4}-\d{2}-\d{2}$/);
 const pricingSchema = z.strictObject({
-  source: z.enum(['https://developers.openai.com/api/pricing', 'https://openai.com/api/pricing/']),
+  source: z.enum([
+    'https://developers.openai.com/api/pricing',
+    'https://developers.openai.com/api/docs/pricing',
+    'https://openai.com/api/pricing/',
+  ]),
   verifiedAt: z.iso.datetime(),
   inputMicroUsdPerMillion: z.number().int().min(1).max(1_000_000_000),
-  cacheWriteMicroUsdPerMillion: positive.max(1_000_000_000),
-  outputMicroUsdPerMillion: positive.max(1_000_000_000),
+  cacheWriteMicroUsdPerMillion: z.number().int().min(1).max(1_000_000_000),
+  outputMicroUsdPerMillion: z.number().int().min(1).max(1_000_000_000),
 });
 export const providerPlanSchema = z.strictObject({
   model: exactModelSchema,
@@ -63,6 +67,10 @@ const cost = (plan: ProviderPlan, input: number, output: number) =>
 /** Invocation-owned conservative ledger. Reservations are never recycled. */
 export class ProviderBudget {
   readonly plan: Readonly<ProviderPlan>;
+  private readonly reservations = new WeakMap<
+    object,
+    { active: boolean; claimed: boolean; outputTokens: number }
+  >();
   private calls = 0;
   private reservedTokens = 0;
   private reservedCostMicroUsd = 0;
@@ -104,10 +112,12 @@ export class ProviderBudget {
     this.reservedTokens += tokens;
     this.reservedCostMicroUsd += amount;
     let settled = false;
-    return {
+    const state = { active: true, claimed: false, outputTokens };
+    const reservation = Object.freeze({
       settle: (usage: ProviderUsage) => {
         if (settled) throw new AgentFailure('provider_budget');
         settled = true;
+        state.active = false;
         this.inputTokens += usage.input_tokens;
         this.outputTokens += usage.output_tokens;
         if (
@@ -122,11 +132,31 @@ export class ProviderBudget {
       unknown: () => {
         if (!settled) {
           settled = true;
+          state.active = false;
           this.complete = false;
           this.halted = true;
         }
       },
-    };
+    });
+    this.reservations.set(reservation, state);
+    return reservation;
+  }
+  claimReservation(reservation: object, outputTokens: number) {
+    const state = this.reservations.get(reservation);
+    if (
+      !state ||
+      !state.active ||
+      state.claimed ||
+      state.outputTokens !== outputTokens ||
+      this.halted
+    )
+      throw new AgentFailure('provider_budget');
+    state.claimed = true;
+  }
+  assertClaimedReservation(reservation: object) {
+    const state = this.reservations.get(reservation);
+    if (!state || !state.active || !state.claimed || this.halted)
+      throw new AgentFailure('provider_budget');
   }
   markUnknown() {
     this.complete = false;

@@ -1,8 +1,15 @@
+import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { applicationErrorCodes } from '@beloveddev/application/application-error';
 import { safeErrorSchema, toolSchemas } from '../src/schemas.js';
 import type { McpToolGateway } from './agent-tool-gateway.js';
+import type { LiveGrant } from './provider-live-approval.js';
+import type {
+  SyntheticAgentFixture,
+  AgentScenarioId,
+  fixtureApprovalBinding,
+} from './evaluation-fixture.js';
 
 export const readOnlyTools = [
   'get_profile',
@@ -123,6 +130,10 @@ export const failureSchema = z.enum([
   'provider_usage_unknown',
   'provider_budget',
   'provider_response_limit',
+  'approval_invalid',
+  'approval_expired',
+  'approval_mismatch',
+  'network_forbidden',
 ]);
 export type AgentFailureCode = z.infer<typeof failureSchema>;
 export class AgentFailure extends Error {
@@ -165,8 +176,144 @@ export interface ModelAdapter {
   complete(
     request: ModelRequest,
     signal: AbortSignal,
+    turn?: LiveTurnAuthorization,
   ): Promise<{ output: string; usage: z.infer<typeof usageSchema> }>;
   close(): Promise<void>;
+}
+// Issuers stay private to this runner. Structural copies are never capabilities.
+const turnBrand: unique symbol = Symbol('approved-model-turn');
+export interface LiveTurnAuthorization {
+  readonly [turnBrand]: true;
+}
+type ExecutionLease = {
+  grant: LiveGrant;
+  invocationId: string;
+  fixture: SyntheticAgentFixture;
+  manifestDigest: string;
+  scenarioId: AgentScenarioId;
+  scenarioDigest: string;
+  bindingFor: typeof fixtureApprovalBinding;
+  model: ModelAdapter;
+  modelId: string;
+  active: boolean;
+  turn: number;
+  plan: Readonly<{ maxInputTokensPerCall: number; maxOutputTokensPerCall: number }>;
+};
+type TurnState = {
+  lease: ExecutionLease;
+  number: number;
+  requestDigest: string;
+  bodyDigest: string;
+  transcriptDigest: string;
+  toolDigest: string;
+  stage: 'issued' | 'claimed' | 'prepared' | 'dispatched' | 'completed';
+};
+const approvedTurns = new WeakMap<object, TurnState>();
+const requestDigest = (value: unknown) =>
+  createHash('sha256').update(JSON.stringify(value)).digest('hex');
+function freezeRequest(value: unknown): void {
+  if (value !== null && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeRequest(child);
+    Object.freeze(value);
+  }
+}
+async function issueTurn(
+  lease: ExecutionLease,
+  request: ModelRequest,
+): Promise<LiveTurnAuthorization> {
+  assertExecutionLease(lease);
+  const { serializeProviderRequest } = await import('./provider-wire-contract.js');
+  assertExecutionLease(lease);
+  const outputCap = Math.min(
+    request.maxOutputTokens,
+    lease.plan.maxOutputTokensPerCall,
+    request.remainingTokens - lease.plan.maxInputTokensPerCall,
+  );
+  if (outputCap < 16) throw new AgentFailure('provider_budget');
+  freezeRequest(request);
+  const capability: LiveTurnAuthorization = Object.freeze({ [turnBrand]: true as const });
+  approvedTurns.set(capability, {
+    lease,
+    number: ++lease.turn,
+    requestDigest: requestDigest(request),
+    transcriptDigest: requestDigest(request.messages),
+    toolDigest: requestDigest(request.tools),
+    bodyDigest: requestDigest(serializeProviderRequest(lease.modelId, request, outputCap)),
+    stage: 'issued',
+  });
+  return capability;
+}
+function assertExecutionLease(lease: ExecutionLease): void {
+  if (!lease.active) throw new AgentFailure('approval_invalid');
+  const binding = lease.bindingFor(lease.fixture, lease.scenarioId);
+  if (
+    binding.fixtureManifestDigest !== lease.manifestDigest ||
+    binding.scenarioSetDigest !== lease.scenarioDigest ||
+    !isDeepStrictEqual(binding.scenarioInventory, [lease.scenarioId])
+  )
+    throw new AgentFailure('approval_mismatch');
+}
+function activeTurn(
+  turn: LiveTurnAuthorization | undefined,
+  grant: LiveGrant,
+  invocationId: string,
+) {
+  const state = turn ? approvedTurns.get(turn) : undefined;
+  if (
+    !state ||
+    !state.lease.active ||
+    state.lease.grant !== grant ||
+    state.lease.invocationId !== invocationId ||
+    state.number !== state.lease.turn
+  )
+    throw new AgentFailure('approval_invalid');
+  assertExecutionLease(state.lease);
+  return state;
+}
+/** Provider verification consumes a runner-issued turn, never creates one. */
+export function claimProviderTurn(
+  turn: LiveTurnAuthorization | undefined,
+  grant: LiveGrant,
+  invocationId: string,
+  model: ModelAdapter,
+  modelId: string,
+  request: ModelRequest,
+): void {
+  const state = activeTurn(turn, grant, invocationId);
+  if (
+    state.stage !== 'issued' ||
+    state.lease.model !== model ||
+    state.lease.modelId !== modelId ||
+    state.requestDigest !== requestDigest(request) ||
+    state.transcriptDigest !== requestDigest(request.messages) ||
+    state.toolDigest !== requestDigest(request.tools)
+  )
+    throw new AgentFailure('approval_mismatch');
+  state.stage = 'claimed';
+}
+/** Body permits can only derive from an already claimed exact request. */
+export function prepareAuthorizedTurn(
+  turn: LiveTurnAuthorization | undefined,
+  grant: LiveGrant,
+  invocationId: string,
+  body: string,
+): void {
+  const state = activeTurn(turn, grant, invocationId);
+  if (state.stage !== 'claimed' || state.bodyDigest !== requestDigest(body))
+    throw new AgentFailure('approval_invalid');
+  state.stage = 'prepared';
+}
+/** Independent transport check before dispatch. */
+export function consumePreparedTurn(
+  turn: LiveTurnAuthorization | undefined,
+  grant: LiveGrant,
+  invocationId: string,
+  body: string,
+): void {
+  const state = activeTurn(turn, grant, invocationId);
+  if (state.stage !== 'prepared' || state.bodyDigest !== requestDigest(body))
+    throw new AgentFailure('approval_invalid');
+  state.stage = 'dispatched';
 }
 /** A test double only: its programmed actions and counters are not model performance. */
 export function offlineModel(actions: readonly unknown[]): ModelAdapter {
@@ -365,11 +512,100 @@ export function failedAgentReport(id: AgentReport['id'], failure: AgentFailureCo
     refusedWithoutToolCall: false,
   };
 }
-export async function runAgentScenario(
+export function runAgentScenario(
   input: unknown,
   model: ModelAdapter,
   gateway: McpToolGateway,
   limitsInput: unknown = defaultAgentLimits,
+): Promise<AgentReport> {
+  return executeAgentScenario(input, model, gateway, limitsInput);
+}
+/** Exactly one canonical fixture scenario per signed invocation; this entry owns revocation. */
+export async function runApprovedAgentScenario(
+  fixture: SyntheticAgentFixture,
+  scenarioId: AgentScenarioId,
+  model: ModelAdapter,
+  grant: LiveGrant,
+  invocationId: string,
+  limitsInput: unknown = defaultAgentLimits,
+): Promise<AgentReport> {
+  const { claimLiveExecution, revokeLiveGrant, ownedLiveFixture } =
+    await import('./provider-live-approval.js');
+  const { claimSyntheticScenario, closeSyntheticFixture } = await import('./evaluation-fixture.js');
+  let report = failedAgentReport('unknown', 'approval_invalid');
+  let engineOwnsCleanup = false;
+  let lease: ExecutionLease | undefined;
+  let cleanupFixture: SyntheticAgentFixture | undefined;
+  const parsedLimits = limitsSchema.safeParse(limitsInput);
+  const cleanupMs = parsedLimits.success
+    ? parsedLimits.data.cleanupTimeoutMs
+    : defaultAgentLimits.cleanupTimeoutMs;
+  try {
+    cleanupFixture = ownedLiveFixture(grant);
+    claimLiveExecution(grant, invocationId, fixture, scenarioId);
+    const owned = await bounded(
+      () => claimSyntheticScenario(fixture, scenarioId),
+      5000,
+      'setup_failed',
+    );
+    const { fixtureApprovalBinding } = await import('./evaluation-fixture.js');
+    const { approvedBudget } = await import('./provider-live-approval.js');
+    const binding = fixtureApprovalBinding(fixture, scenarioId);
+    const plan = approvedBudget(grant, invocationId).plan;
+    lease = {
+      grant,
+      invocationId,
+      fixture,
+      manifestDigest: binding.fixtureManifestDigest,
+      scenarioId,
+      scenarioDigest: binding.scenarioSetDigest,
+      bindingFor: fixtureApprovalBinding,
+      model,
+      modelId: plan.model,
+      plan,
+      active: true,
+      turn: 0,
+    };
+    engineOwnsCleanup = true;
+    report = await executeAgentScenario(owned.scenario, model, owned.gateway, limitsInput, lease);
+  } catch (error: unknown) {
+    report.status = 'failed';
+    report.failure = error instanceof AgentFailure ? error.code : 'provider_failure';
+  } finally {
+    if (lease) lease.active = false;
+    // Attempt all owned cleanup steps before revocation, even after another step fails.
+    for (const close of [
+      ...(!engineOwnsCleanup
+        ? [() => bounded(() => model.close(), cleanupMs, 'cleanup_failed')]
+        : []),
+      ...(cleanupFixture
+        ? [() => bounded(() => closeSyntheticFixture(cleanupFixture!), 15000, 'cleanup_failed')]
+        : []),
+    ]) {
+      try {
+        await close();
+      } catch {
+        report.status = 'failed';
+        report.failure ??= 'cleanup_failed';
+        report.cleanup = 'failed';
+      }
+    }
+    try {
+      revokeLiveGrant(grant);
+    } catch {
+      report.status = 'failed';
+      report.failure ??= 'cleanup_failed';
+      report.cleanup = 'failed';
+    }
+  }
+  return agentReportSchema.parse(report);
+}
+async function executeAgentScenario(
+  input: unknown,
+  model: ModelAdapter,
+  gateway: McpToolGateway,
+  limitsInput: unknown = defaultAgentLimits,
+  live?: ExecutionLease,
 ): Promise<AgentReport> {
   const report = failedAgentReport('unknown', 'invalid_scenario');
   const parsedLimits = limitsSchema.safeParse(limitsInput);
@@ -380,9 +616,13 @@ export async function runAgentScenario(
     const scenario = parsed.data;
     report.id = scenario.id;
     if (!parsedLimits.success) throw new AgentFailure('invalid_limits');
-    if (model.mode !== 'offline' && model.mode !== 'provider_mock')
+    if (model.mode === 'live') {
+      if (!live) throw new AgentFailure('live_disabled');
+      const { assertLiveGrant } = await import('./provider-live-approval.js');
+      assertLiveGrant(live.grant, live.invocationId);
+    } else if (model.mode !== 'offline' && model.mode !== 'provider_mock')
       throw new AgentFailure('live_disabled');
-    if (model.mode === 'provider_mock') {
+    if (model.mode === 'provider_mock' || model.mode === 'live') {
       if (!model.usageSnapshot) throw new AgentFailure('provider_configuration');
       report.usage.kind = 'provider_reported';
     }
@@ -419,16 +659,21 @@ export async function runAgentScenario(
             throw new AgentFailure('request_size_limit');
           report.turns++;
           report.usage.complete = false;
+          const authorization =
+            live && model.mode === 'live' ? await issueTurn(live, request) : undefined;
           let response: Awaited<ReturnType<ModelAdapter['complete']>>;
           try {
             response = await bounded(
-              (s) => model.complete(request, s),
+              (s) => model.complete(request, s, authorization),
               limits.modelTimeoutMs,
               'model_timeout',
               signal,
             );
           } catch (error: unknown) {
             throw error instanceof AgentFailure ? error : new AgentFailure('provider_failure');
+          } finally {
+            const state = authorization ? approvedTurns.get(authorization) : undefined;
+            if (state) state.stage = 'completed';
           }
           const checked = modelReplySchema.safeParse(response);
           if (
@@ -500,7 +745,8 @@ export async function runAgentScenario(
     report.status = 'failed';
     report.failure = error instanceof AgentFailure ? error.code : 'provider_failure';
   } finally {
-    if (model.mode === 'provider_mock' && model.usageSnapshot) {
+    if (live) live.active = false;
+    if ((model.mode === 'provider_mock' || model.mode === 'live') && model.usageSnapshot) {
       try {
         const snapshot = reportUsageSchema.safeParse(model.usageSnapshot());
         if (snapshot.success && snapshot.data.kind === 'provider_reported') {

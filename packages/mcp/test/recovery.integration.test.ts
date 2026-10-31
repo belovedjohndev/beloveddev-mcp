@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm, readFile, writeFile, cp, link, mkdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -335,6 +336,7 @@ describe('PostgreSQL 18 backup and verified isolated recovery', () => {
           snapshot_active: true,
         });
         expect(before.rows[0]?.pid).toBeGreaterThan(0);
+        const observedContexts = [...connections.mock.contexts];
         const settings: { pid: number; idle_timeout_ms: number }[] = [];
         for (const client of connections.mock.contexts) {
           if (client instanceof PgClient && client.database === config.database) {
@@ -344,6 +346,51 @@ describe('PostgreSQL 18 backup and verified isolated recovery', () => {
             );
             settings.push(...actual.rows);
           }
+        }
+        if (process.env['BELOVEDDEV_TEST_DIAGNOSTICS'] === '1') {
+          const recoveryRequire = createRequire(
+            import.meta.resolve('@beloveddev/database/recovery'),
+          );
+          const testRequire = createRequire(import.meta.url);
+          const nativePg: unknown = recoveryRequire('pg');
+          const constructor =
+            nativePg !== null && typeof nativePg === 'object'
+              ? (Reflect.get(nativePg, 'Client') as unknown)
+              : undefined;
+          const pids = observedContexts.flatMap((client: unknown) => {
+            if (client === null || typeof client !== 'object') return [];
+            const pid: unknown = Reflect.get(client, 'processID');
+            return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? [pid] : [];
+          });
+          process.stderr.write(
+            'TEST_RECOVERY_DIAGNOSTIC ' +
+              JSON.stringify({
+                schemaVersion: 1,
+                deadline,
+                contextCount: observedContexts.length,
+                contextCountAfterQuery: connections.mock.contexts.length,
+                databaseMatchCount: observedContexts.filter(
+                  (client: unknown) =>
+                    client !== null &&
+                    typeof client === 'object' &&
+                    Reflect.get(client, 'database') === config.database,
+                ).length,
+                instanceofCount: observedContexts.filter((client) => client instanceof PgClient)
+                  .length,
+                observedBackendPids: pids,
+                queriedBackendPids: settings.map(({ pid }) => pid),
+                snapshotHolderPid: before.rows[0]?.pid,
+                snapshotHolderCaptured: pids.includes(before.rows[0]?.pid ?? -1),
+                testAndRecoveryRequireResolveSamePg:
+                  testRequire.resolve('pg') === recoveryRequire.resolve('pg'),
+                testConstructorEqualsRecoveryRequire: constructor === PgClient,
+                prototypeSpyStillInstalled: Object.is(
+                  Reflect.get(PgClient.prototype, 'connect'),
+                  connections,
+                ),
+              }) +
+              '\n',
+          );
         }
         // Match the server-reported setting to the PID holding this backup's snapshot/lock.
         expect(settings.filter(({ pid }) => pid === before.rows[0]?.pid)).toEqual([

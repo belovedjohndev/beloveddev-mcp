@@ -14,11 +14,21 @@ const reporter: Reporter = {
     const states = modules.flatMap((module) =>
       [...module.children.allTests()].map((test) => test.result().state),
     );
+    const measurements = modules.flatMap((module) =>
+      [...module.children.allTests()].flatMap((test) =>
+        test.meta().liveReadinessEstimate ? [test.meta().liveReadinessEstimate] : [],
+      ),
+    );
     const report = providerControlReport(
       states,
       reason !== 'passed' || errors.length > 0 || modules.some((module) => !module.ok()),
+      measurements,
     );
-    if (report.status !== 'passed') process.exitCode = 1;
+    if (
+      ('offlineControlsStatus' in report ? report.offlineControlsStatus : report.status) !==
+      'passed'
+    )
+      process.exitCode = 1;
     try {
       mkdirSync(fileURLToPath(new URL('./.evaluation-reports/', import.meta.url)), {
         recursive: true,
@@ -31,17 +41,24 @@ const reporter: Reporter = {
         { flag: 'wx', mode: 0o600 },
       );
       process.stdout.write(JSON.stringify(report) + '\n');
-      process.stderr.write('Mock provider controls: .evaluation-reports/' + name + '\n');
+      process.stderr.write(
+        'Offline provider readiness controls: .evaluation-reports/' + name + '\n',
+      );
     } catch {
       process.exitCode = 1;
-      process.stderr.write('Mock provider report publication failed.\n');
+      process.stderr.write('Offline provider readiness report publication failed.\n');
     }
   },
 };
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['packages/mcp/test/openai-provider.test.ts'],
+    include: [
+      'packages/mcp/test/openai-provider.test.ts',
+      'packages/mcp/test/provider-live-readiness.test.ts',
+      'packages/mcp/test/approved-test-cluster.test.ts',
+      'packages/mcp/test/provider-schema-compatibility.test.ts',
+    ],
     testTimeout: 20000,
     clearMocks: true,
     restoreMocks: true,

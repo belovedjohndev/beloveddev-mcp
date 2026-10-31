@@ -971,6 +971,59 @@ Do not enable live execution in ordinary CI or the existing eval commands. Mocke
 provider fields are not simulated C1 tokens or actual live measurements. Missing/late
 usage remains incomplete. Existing release blockers remain unchanged.
 
+## M9-C2B1: Secure live-provider readiness, tested offline
+
+The [B1 specification](m9-c2b1-live-readiness-spec.md) adds fixed-endpoint HTTPS,
+signed invocation approval, single-use reservation permits, actual pinned model
+tokenization, native-driver controls and safe readiness measurements. Reuse the
+existing provider wire contract, budget, runner/oracles and seven-tool gateway.
+Keep ordinary commands offline; live execution requires a separate trusted entry
+and capability, with no env/key-presence activation and explicit CI rejection.
+
+Preserve C1 scenario limits and all six definitions. Measure catalog preflight and
+record any mismatch as a B2 decision. Measured representative preflight is 13013
+tokens (11733 input + 1024 framing + 256 output) versus the 4096-token ceiling;
+full live scenarios remain blocked pending that decision. Correct only the proven price-schema bound
+and enforce the provider's minimum 16 output tokens on the network path. No
+production domain/authentication/MCP/schema/migration/M8-G changes. Pin the necessary
+tokenizer as a development dependency; no OpenAI SDK/framework is needed.
+
+Run format:check, verify, db:check, verify:all, eval, eval:agent, eval:provider:test,
+focused controls and diff --check, using isolated real PostgreSQL resources and a
+fresh LF checkout where baseline CRLF files interfere. Preserve migration bytes,
+all existing Docker resources, other worktrees and safe reports. Intercept HTTPS
+and prohibit actual sockets/fetch in readiness tests; no provider request is made.
+
+M9-C2A is mock contract validation; B1 is offline-tested live-network readiness;
+B2 is future separately authorized real-model evaluation. The documented initial
+profile gpt-4.1-mini-2025-04-14 sunsets January 14, 2027; deny it then rather than
+substituting a model. Real account access, TLS/API compatibility, framing, latency
+and billing are unverified. B2 needs protected owner trust-key/approval provisioning,
+new invocation identity, verified available model/pricing, explicit monetary and
+call/token limits, synthetic fixtures and account billing safeguards. Replay
+protection is process-local. No live launcher, paid call, commit or push in B1.
+
+## M9-C2B1R: Fixture-bound authorization and final revocation
+
+The [security repair specification](m9-c2b1r-security-repair-spec.md) binds signed
+approvals to a trusted synthetic fixture manifest, canonical scenario-set digest
+and exact one-scenario inventory. Existing runtime composition does not mint
+fixture capabilities. The approved entry resolves its scenario/gateway internally
+and revokes its grant after independent bounded cleanup on every outcome. There
+is no multi-scenario approval or arbitrary prompt/client input.
+
+Validate the actual generated wire JSON Schema against the reviewed base-model
+Structured Outputs subset without weakening application schemas. Version-3
+reports separate offline controls, token preflight and overall blocked readiness.
+Keep 13013 versus 4096 explicitly blocked; passing offline controls is not live
+readiness. Preserve legacy mock-report compatibility and nonzero offline failures.
+
+Before C2B2: implement a reviewed persistent atomic replay store, select and
+approve an active model/profile instead of silently replacing the deprecated
+snapshot, and obtain owner decisions on token/money limits, protected trust-key
+provisioning and actual live compatibility verification. No real API request,
+charge, domain/authentication/MCP-contract/migration change, commit or push.
+
 ## 12. Verification Commands
 
 Milestone 0 uses npm workspaces and the committed npm lockfile:
@@ -1048,3 +1101,21 @@ production startup/shutdown behavior
 ```
 
 External integrations are not required for V1 completion.
+
+## M9-C2B1S: approved request binding
+
+See the [request-binding specification](m9-c2b1s-request-binding-spec.md). Preserve
+B1/B1R fixture ownership and final revocation, and require a private execution lease,
+runner-issued one-use turns and a derived one-use body permit. Bind exact model,
+adapter, grant, invocation, fixture/scenario digests, tools, transcript and budgets.
+Only actual gateway observations advance the canonical conversation. Reject direct
+or altered provider requests before credentials or HTTPS. Recheck an explicitly
+marked, system-identifier-pinned loopback test cluster before fixture creation.
+
+Verify malformed prompt/history/tool/model bindings, capability/permit replay,
+revoked/completed execution, zero egress on rejection, independent cleanup and
+unchanged offline oracles. Keep the 4,096 ceiling, current model and all migration
+bytes. Offline controls do not authorize C2B2: durable atomic replay, active-model
+selection, adequate reviewed budgets, pricing and live compatibility remain blocked.
+No live calls, persistent replay service, production launcher or release remediation
+are part of this repair.

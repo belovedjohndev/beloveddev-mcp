@@ -22,7 +22,7 @@ export class TestCleanupError extends Error {
 
 /** Independent steps always run; diagnostics deliberately exclude raw errors/SQL/credentials. */
 export async function cleanupTestResources(
-  steps: readonly { stage: string; run: () => Promise<void> }[],
+  steps: readonly { stage: string; run: () => void | Promise<void> }[],
 ) {
   const failures: { stage: string; code: string }[] = [];
   for (const { stage, run } of steps) {
@@ -50,6 +50,32 @@ export async function cleanupTestResources(
     }
   }
   if (failures.length) throw new TestCleanupError(failures);
+}
+
+/** Preserve the original assertion while independently attempting every owned cleanup step. */
+export async function withTestResourceCleanup<T>(
+  operation: () => T | Promise<T>,
+  steps: Parameters<typeof cleanupTestResources>[0],
+): Promise<T> {
+  const outcome = await Promise.resolve()
+    .then(operation)
+    .then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+  try {
+    await cleanupTestResources(steps);
+  } catch (cleanupError: unknown) {
+    if (!outcome.ok)
+      throw new AggregateError(
+        [outcome.error, cleanupError],
+        'Test assertion and resource cleanup failed.',
+        { cause: cleanupError },
+      );
+    throw cleanupError;
+  }
+  if (!outcome.ok) throw outcome.error;
+  return outcome.value;
 }
 
 export function createTestDatabase(
