@@ -9,7 +9,20 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { createTlsPostgres } from '@beloveddev/test-support/tls-database';
-import { createTestDatabase } from '@beloveddev/test-support/test-database';
+import {
+  createTestDatabase,
+  withTestResourceCleanup,
+  cleanupTestResources,
+} from '@beloveddev/test-support/test-database';
+import {
+  SmokeObservation,
+  SmokeFailure,
+  smokeFailureCodes,
+  invalidTransportUrl,
+  type StartupEvent,
+  type StartupCategory,
+  type SmokeFailureCode,
+} from '../packages/test-support/dist/container-smoke-observation.js';
 import { seedTwoTenants } from '@beloveddev/test-support/tenant-fixtures';
 import { seedOpportunity } from '@beloveddev/test-support/opportunity-fixtures';
 import { safeErrorSchema, toolSchemas } from '@beloveddev/mcp/schemas';
@@ -48,11 +61,13 @@ async function docker(args: string[], timeout = 30_000) {
     process.stderr.write(
       JSON.stringify({
         event: 'container_smoke.docker_failed',
-        operation: args.slice(0, 2),
+        operation: ['run', 'exec', 'kill', 'rm', 'image', 'info', 'buildx'].includes(args[0] ?? '')
+          ? args[0]
+          : 'other',
         phase,
       }) + '\n',
     );
-    throw new Error(`Docker operation failed during ${phase}.`);
+    throw new SmokeFailure('docker_command_failure');
   }
 }
 
@@ -69,16 +84,17 @@ const resultSchema = z.object({
   structuredContent: z.unknown().optional(),
 });
 
-async function within<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+async function within<T>(
+  promise: Promise<T>,
+  milliseconds: number,
+  code: SmokeFailureCode = 'deadline_exceeded',
+): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       promise,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error('Container smoke deadline exceeded.')),
-          milliseconds,
-        );
+        timer = setTimeout(() => reject(new SmokeFailure(code)), milliseconds);
       }),
     ]);
   } finally {
@@ -113,13 +129,25 @@ function launch(network: string, environment: Record<string, string>, hideMigrat
   );
   const pending = new Map<number, { resolve(value: Response): void; reject(error: Error): void }>();
   let nextId = 0;
-  let malformed = false;
-  let wireIssue: 'invalid_message' | 'unexpected_response' | undefined;
-  let stdoutLines = 0;
-  let stderr = '';
+  const observation = new SmokeObservation();
+  const secrets = [environment['DATABASE_URL'] ?? '', environment['MCP_CURSOR_SECRET'] ?? ''];
+  child.once('spawn', () => {
+    observation.spawned = true;
+  });
+  const report = (outcome: 'passed' | 'failed', codes: string[] = []) => {
+    process.stderr.write(
+      JSON.stringify({
+        event: 'container_smoke.child_result',
+        phase,
+        outcome,
+        codes,
+        ...observation.snapshot(),
+      }) + '\n',
+    );
+  };
   const lines = createInterface({ input: child.stdout });
   lines.on('line', (line) => {
-    stdoutLines += 1;
+    observation.stdoutLines += 1;
     const parsed = responseSchema.safeParse(
       (() => {
         try {
@@ -130,23 +158,21 @@ function launch(network: string, environment: Record<string, string>, hideMigrat
       })(),
     );
     if (!parsed.success || !pending.has(parsed.data.id)) {
-      malformed = true;
-      wireIssue = parsed.success ? 'unexpected_response' : 'invalid_message';
+      observation.invalidStdout = true;
     } else pending.get(parsed.data.id)?.resolve(parsed.data);
   });
-  child.stderr.on('data', (chunk: Buffer) => {
-    stderr += chunk.toString();
-    if (stderr.length > 1024 * 1024) {
-      malformed = true;
-      stderr = stderr.slice(0, 1024 * 1024);
-    }
-  });
+  child.stderr.on('data', (chunk: Buffer) => observation.stderrChunk(chunk.toString()));
   child.stdin.on('error', () => {
     for (const request of pending.values()) request.reject(new Error('Container input closed.'));
   });
   const exited = new Promise<number | null>((resolve, reject) => {
-    child.once('close', resolve);
-    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      observation.exited = true;
+      observation.exitCode = code;
+      observation.signal = signal;
+      resolve(code);
+    });
+    child.once('error', () => reject(new SmokeFailure('child_startup_failure')));
   });
   void exited.then(
     () => {
@@ -200,6 +226,7 @@ function launch(network: string, environment: Record<string, string>, hideMigrat
             child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
           }),
           20_000,
+          'response_timeout',
         );
         assert.equal(response.error, undefined);
         return response.result;
@@ -213,81 +240,56 @@ function launch(network: string, environment: Record<string, string>, hideMigrat
     async stop(signal?: 'SIGINT' | 'SIGTERM') {
       if (signal) await docker(['kill', '--signal', signal, name]);
       else child.stdin.end();
-      const code = await within(exited, 18_000).catch(() => null);
-      if (code !== 0)
-        process.stderr.write(
-          JSON.stringify({
-            event: 'container_smoke.stop_failed',
-            exitCode: code,
-            signal: signal ?? 'EOF',
-          }) + '\n',
-        );
-      assert.equal(code, 0);
-    },
-    async expectStartupFailure(event: string, category?: string) {
-      const code = await within(exited, 18_000);
-      const records = this.records();
-      const expected = records.some(
-        (record) =>
-          record['event'] === event && (category === undefined || record['category'] === category),
-      );
-      if (code !== 1 || stdoutLines !== 0 || !expected) {
-        const safeCategory = z.enum([
-          'TIMEOUT',
-          'CONNECTION',
-          'IDENTITY',
-          'SCHEMA',
-          'READ_ONLY',
-          'UNSAFE_PRIVILEGES',
-          'MISSING_PRIVILEGES',
-          'TRANSPORT_POLICY',
-        ]);
-        process.stderr.write(
-          JSON.stringify({
-            event: 'container_smoke.startup_mismatch',
-            exitCode: code,
-            stdoutLines,
-            categories: records
-              .map((record) => safeCategory.safeParse(record['category']))
-              .filter((result) => result.success)
-              .map((result) => result.data)
-              .slice(0, 8),
-          }) + '\n',
-        );
+      try {
+        const code = await within(exited, 18_000, 'child_exit_timeout');
+        if (code !== 0) throw new SmokeFailure('wrong_exit_code');
+      } catch (error: unknown) {
+        report('failed', smokeFailureCodes(error));
+        throw error;
       }
-      assert.equal(code, 1);
-      assert.equal(stdoutLines, 0);
-      assert(expected);
-      assert(!records.some((record) => record['event'] === 'mcp.ready'));
+    },
+    async expectStartupFailure(event: StartupEvent, category?: StartupCategory) {
+      try {
+        await within(exited, 18_000, 'child_exit_timeout');
+        observation.expectStartupFailure(event, category, secrets);
+        report('passed');
+      } catch (error: unknown) {
+        report('failed', smokeFailureCodes(error));
+        throw error;
+      }
     },
     records() {
-      if (malformed)
-        process.stderr.write(
-          JSON.stringify({
-            event: 'container_smoke.protocol_failed',
-            wireIssue,
-          }) + '\n',
-        );
-      assert.equal(malformed, false, 'stdout must contain only expected JSON-RPC responses');
-      for (const key of ['DATABASE_URL', 'MCP_CURSOR_SECRET']) {
-        const secret = environment[key];
-        if (secret) assert(!stderr.includes(secret), 'runtime secrets must not appear in stderr');
+      try {
+        return observation.records(secrets);
+      } catch (error: unknown) {
+        report('failed', smokeFailureCodes(error));
+        throw error;
       }
-      return stderr
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .map((line) => z.record(z.string(), z.unknown()).parse(JSON.parse(line)));
     },
     async close() {
       try {
-        await docker(['rm', '--force', name]);
-      } finally {
-        child.stdin.destroy();
-        await within(
-          exited.catch(() => null),
-          5000,
-        );
-        lines.close();
+        await cleanupTestResources([
+          { stage: 'owned_container', run: () => docker(['rm', '--force', name]).then(() => {}) },
+          {
+            stage: 'child_input',
+            run: () => {
+              child.stdin.destroy();
+            },
+          },
+          {
+            stage: 'child_exit',
+            run: () => within(exited, 5000, 'child_exit_timeout').then(() => {}),
+          },
+          {
+            stage: 'line_reader',
+            run: () => {
+              lines.close();
+            },
+          },
+        ]);
+      } catch {
+        report('failed', ['cleanup_failure']);
+        throw new SmokeFailure('cleanup_failure');
       }
     },
   };
@@ -379,6 +381,14 @@ async function sourceSnapshot() {
 }
 
 async function run() {
+  const args = process.argv.slice(2);
+  if (args.length > 0) {
+    if (args.length !== 1 || args[0] !== '--transport-policy-only')
+      throw new SmokeFailure('assertion_failure');
+    // Diagnostic mode uses the existing final image; it does not replace the full gate.
+    await runtimeChecks(true);
+    return;
+  }
   assert.equal(await docker(['version', '--format', '{{.Server.Os}}']), 'linux');
   const builder = `beloveddev-release-${randomUUID()}`;
   const source = await sourceSnapshot();
@@ -482,14 +492,21 @@ async function run() {
     `,
   ]);
   const artifact = z.object({ node: z.string(), migrations: z.number() }).parse(JSON.parse(probe));
+  await runtimeChecks();
+  process.stderr.write(
+    `Container smoke passed: ${imageId}; Node ${artifact.node}; ${artifact.migrations} migration files; eight tools; EOF/SIGINT/SIGTERM; six safe startup rejections; no application listeners.\n`,
+  );
+}
+
+async function runtimeChecks(transportOnly = false) {
   phase = 'PostgreSQL provisioning';
   const postgres = await createTlsPostgres();
-  try {
+  await withTestResourceCleanup(async () => {
     const database = await createTestDatabase(postgres.url, {
       mcpRuntime: true,
       tlsCa: postgres.ca,
     });
-    try {
+    await withTestResourceCleanup(async () => {
       const tenants = await seedTwoTenants(database.admin.db);
       const opportunity = await seedOpportunity(database.admin.db, tenants.a.tenantId);
       const url = new URL(database.runtimeUrl);
@@ -505,10 +522,22 @@ async function run() {
         MCP_LOCAL_USER_ID: tenants.a.userId,
         MCP_CURSOR_SECRET: randomUUID() + randomUUID(),
       };
+      if (transportOnly) {
+        phase = 'safe rejection: TRANSPORT_POLICY';
+        const session = launch(postgres.containerName, {
+          ...environment,
+          DATABASE_URL: invalidTransportUrl(url.href),
+        });
+        await withTestResourceCleanup(
+          () => session.expectStartupFailure('mcp.startup_failed', 'TRANSPORT_POLICY'),
+          [{ stage: 'container_session', run: () => session.close() }],
+        );
+        return;
+      }
       for (const signal of [undefined, 'SIGINT', 'SIGTERM'] as const) {
         phase = signal === undefined ? 'MCP tools and EOF' : `Linux ${signal}`;
         const session = launch(postgres.containerName, environment);
-        try {
+        await withTestResourceCleanup(async () => {
           await initialize(session);
           await session.assertNoListeners();
           if (signal === undefined) {
@@ -587,9 +616,7 @@ async function run() {
             ),
           );
           assert(!JSON.stringify(records).includes('container-private-note'));
-        } finally {
-          await session.close();
-        }
+        }, [{ stage: 'container_session', run: () => session.close() }]);
       }
       const adminUrl = new URL(postgres.url);
       adminUrl.pathname = url.pathname;
@@ -601,9 +628,7 @@ async function run() {
         [{ DATABASE_URL: adminUrl.href }, 'mcp.startup_failed', 'UNSAFE_PRIVILEGES'],
         [
           {
-            DATABASE_URL: url.href
-              .replace('localhost', 'db.invalid')
-              .replace('verify-full', 'disable'),
+            DATABASE_URL: invalidTransportUrl(url.href),
           },
           'mcp.startup_failed',
           'TRANSPORT_POLICY',
@@ -612,33 +637,28 @@ async function run() {
       for (const [override, event, category] of failures) {
         phase = `safe rejection: ${category ?? Object.keys(override)[0]}`;
         const session = launch(postgres.containerName, { ...environment, ...override });
-        try {
-          await session.expectStartupFailure(event, category);
-        } finally {
-          await session.close();
-        }
+        await withTestResourceCleanup(
+          () => session.expectStartupFailure(event, category),
+          [{ stage: 'container_session', run: () => session.close() }],
+        );
       }
       phase = 'missing migration assets';
       const missingMigrations = launch(postgres.containerName, environment, true);
-      try {
-        await missingMigrations.expectStartupFailure('mcp.startup_failed', 'CONNECTION');
-      } finally {
-        await missingMigrations.close();
-      }
-    } finally {
-      await database.close();
-    }
-  } finally {
-    await postgres.close();
-  }
-  process.stderr.write(
-    `Container smoke passed: ${imageId}; Node ${artifact.node}; ${artifact.migrations} migration files; eight tools; EOF/SIGINT/SIGTERM; six safe startup rejections; no application listeners.\n`,
-  );
+      await withTestResourceCleanup(
+        () => missingMigrations.expectStartupFailure('mcp.startup_failed', 'CONNECTION'),
+        [{ stage: 'container_session', run: () => missingMigrations.close() }],
+      );
+    }, [{ stage: 'database_fixture', run: () => database.close() }]);
+  }, [{ stage: 'tls_postgres', run: () => postgres.close() }]);
 }
 
 try {
   await run();
-} catch {
+} catch (error: unknown) {
+  process.stderr.write(
+    JSON.stringify({ event: 'container_smoke.failed', phase, codes: smokeFailureCodes(error) }) +
+      '\n',
+  );
   process.stderr.write(
     `Container smoke failed during ${phase}. Runtime secrets and raw errors are omitted.\n`,
   );
