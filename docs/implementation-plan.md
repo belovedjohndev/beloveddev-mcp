@@ -1119,3 +1119,23 @@ bytes. Offline controls do not authorize C2B2: durable atomic replay, active-mod
 selection, adequate reviewed budgets, pricing and live compatibility remain blocked.
 No live calls, persistent replay service, production launcher or release remediation
 are part of this repair.
+
+## M9-C2B2B1: durable replay ledger foundation (offline)
+
+Implement the [reviewed replay design](m9-c2b2a-durable-replay-spec.md) as a separate
+PostgreSQL evaluator control store; see the [foundation notes](m9-c2b2b1-replay-ledger-foundation.md).
+Three tables retain invocation/identifier/turn claims with atomic conditional
+transitions, immutable bindings and permanent tombstones. Separate administrative
+migrations, identity/catalog/privilege/durability gates and bounded owned sessions
+must not alter application startup, migration bytes or business permissions.
+
+Acceptance includes real two-process admission races, restart rejection, rollback,
+unknown COMMIT outcomes, expiry under locks, database and privilege failures,
+state tampering and independent cleanup. Retain normal two-worker integration
+scheduling and all existing assertions. Verify both migration streams independently.
+
+This foundation is not provider integration: do not change live grants, turns,
+network permits, signing bytes, wire format, model snapshot or token ceiling.
+No live API requests or billable operations. Subsequent integration and owner
+approval are required before removing the durable-replay readiness blocker;
+model, budget, compatibility and existing release blockers remain separate.
