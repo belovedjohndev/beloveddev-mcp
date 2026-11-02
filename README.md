@@ -483,3 +483,17 @@ C2B2 remains blocked: the measured 13,013-token request exceeds the unchanged
 4,096-token limit; replay protection is process-local; the current model snapshot
 is deprecated. Durable replay storage, an active model and owner-approved budgets
 require separate review. Ordinary evaluation commands remain offline.
+
+### M9-C2B2B1: offline durable replay ledger foundation
+
+The [ledger foundation](docs/m9-c2b2b1-replay-ledger-foundation.md) adds a separate
+PostgreSQL control database schema/migration stream, bounded atomic store operations,
+trusted identity and effective-privilege checks, and real concurrency/restart tests.
+Administrative commands are `eval:replay:generate`, `eval:replay:check` and
+`eval:replay:migrate`; they do not change the application migration stream.
+
+The store is not connected to the provider and returns no live execution capability.
+Existing provider replay controls remain process-local until separately reviewed
+integration. No environment flag enables networking, and ordinary evaluations stay
+offline. The unchanged token mismatch, model/budget approvals, live compatibility
+and M8-G release blockers remain. This slice makes no live API calls.

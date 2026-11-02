@@ -17,3 +17,6 @@
 
 # Readiness hashes the original migration bytes. Preserve them on every OS.
 /packages/database/migrations/** -text
+
+# Evaluator migration integrity also depends on original artifact bytes.
+/packages/database/evaluation-replay-migrations/** -text

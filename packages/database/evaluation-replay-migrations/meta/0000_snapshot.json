@@ -1,0 +1,470 @@
+{
+  "id": "cc390205-8a53-458e-97d8-cd75c4281d4b",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "evaluation_replay.identifiers": {
+      "name": "identifiers",
+      "schema": "evaluation_replay",
+      "columns": {
+        "identifier": {
+          "name": "identifier",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "invocation_id": {
+          "name": "invocation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "identifiers_invocation_id_invocations_invocation_id_fk": {
+          "name": "identifiers_invocation_id_invocations_invocation_id_fk",
+          "tableFrom": "identifiers",
+          "tableTo": "invocations",
+          "schemaTo": "evaluation_replay",
+          "columnsFrom": [
+            "invocation_id"
+          ],
+          "columnsTo": [
+            "invocation_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "evaluation_replay.invocations": {
+      "name": "invocations",
+      "schema": "evaluation_replay",
+      "columns": {
+        "invocation_id": {
+          "name": "invocation_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "approval_id": {
+          "name": "approval_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "execution_id": {
+          "name": "execution_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "approval_digest": {
+          "name": "approval_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_key_fingerprint": {
+          "name": "owner_key_fingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "fixture_manifest_digest": {
+          "name": "fixture_manifest_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scenario_set_digest": {
+          "name": "scenario_set_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "scenario_id": {
+          "name": "scenario_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "model": {
+          "name": "model",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "compatibility_profile": {
+          "name": "compatibility_profile",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "plan_digest": {
+          "name": "plan_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "issued_at": {
+          "name": "issued_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pricing_verified_at": {
+          "name": "pricing_verified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "admitted_at": {
+          "name": "admitted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "clock_timestamp()"
+        },
+        "max_calls": {
+          "name": "max_calls",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "max_input_tokens_per_call": {
+          "name": "max_input_tokens_per_call",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "max_output_tokens_per_call": {
+          "name": "max_output_tokens_per_call",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "max_total_tokens": {
+          "name": "max_total_tokens",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "max_planned_cost_micro_usd": {
+          "name": "max_planned_cost_micro_usd",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'admitted'"
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "closed_at": {
+          "name": "closed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "last_turn_number": {
+          "name": "last_turn_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "invocations_approval_id_unique": {
+          "name": "invocations_approval_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "approval_id"
+          ]
+        },
+        "invocations_execution_id_unique": {
+          "name": "invocations_execution_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "execution_id"
+          ]
+        },
+        "replay_invocation_owner": {
+          "name": "replay_invocation_owner",
+          "nullsNotDistinct": false,
+          "columns": [
+            "invocation_id",
+            "execution_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "replay_invocation_digests": {
+          "name": "replay_invocation_digests",
+          "value": "\"evaluation_replay\".\"invocations\".\"approval_digest\" ~ '^[a-f0-9]{64}$' AND \"evaluation_replay\".\"invocations\".\"owner_key_fingerprint\" ~ '^[a-f0-9]{64}$' AND \"evaluation_replay\".\"invocations\".\"fixture_manifest_digest\" ~ '^[a-f0-9]{64}$' AND \"evaluation_replay\".\"invocations\".\"scenario_set_digest\" ~ '^[a-f0-9]{64}$' AND \"evaluation_replay\".\"invocations\".\"plan_digest\" ~ '^[a-f0-9]{64}$'"
+        },
+        "replay_invocation_model": {
+          "name": "replay_invocation_model",
+          "value": "\"evaluation_replay\".\"invocations\".\"model\" = 'gpt-4.1-mini-2025-04-14' AND \"evaluation_replay\".\"invocations\".\"compatibility_profile\" = 'gpt41-mini-text-v1-2026-10-29'"
+        },
+        "replay_invocation_scenario": {
+          "name": "replay_invocation_scenario",
+          "value": "\"evaluation_replay\".\"invocations\".\"scenario_id\" IN ('evidence_retrieval','opportunity_selection','score_interpretation','unavailable_information','tenant_boundary','mutation_refusal')"
+        },
+        "replay_invocation_times": {
+          "name": "replay_invocation_times",
+          "value": "\"evaluation_replay\".\"invocations\".\"expires_at\" > \"evaluation_replay\".\"invocations\".\"issued_at\" AND \"evaluation_replay\".\"invocations\".\"expires_at\" <= \"evaluation_replay\".\"invocations\".\"issued_at\" + interval '15 minutes' AND \"evaluation_replay\".\"invocations\".\"expires_at\" <= timestamptz '2027-01-14 00:00:00+00' AND \"evaluation_replay\".\"invocations\".\"pricing_verified_at\" <= \"evaluation_replay\".\"invocations\".\"issued_at\" AND \"evaluation_replay\".\"invocations\".\"admitted_at\" >= \"evaluation_replay\".\"invocations\".\"issued_at\" AND \"evaluation_replay\".\"invocations\".\"admitted_at\" < \"evaluation_replay\".\"invocations\".\"expires_at\" AND (\"evaluation_replay\".\"invocations\".\"started_at\" IS NULL OR (\"evaluation_replay\".\"invocations\".\"started_at\" >= \"evaluation_replay\".\"invocations\".\"admitted_at\" AND \"evaluation_replay\".\"invocations\".\"started_at\" < \"evaluation_replay\".\"invocations\".\"expires_at\")) AND (\"evaluation_replay\".\"invocations\".\"closed_at\" IS NULL OR \"evaluation_replay\".\"invocations\".\"closed_at\" >= \"evaluation_replay\".\"invocations\".\"admitted_at\")"
+        },
+        "replay_invocation_limits": {
+          "name": "replay_invocation_limits",
+          "value": "\"evaluation_replay\".\"invocations\".\"max_calls\" BETWEEN 1 AND 36 AND \"evaluation_replay\".\"invocations\".\"max_input_tokens_per_call\" BETWEEN 1 AND 1000000 AND \"evaluation_replay\".\"invocations\".\"max_output_tokens_per_call\" BETWEEN 16 AND 512 AND \"evaluation_replay\".\"invocations\".\"max_total_tokens\" BETWEEN 1 AND 4096 AND \"evaluation_replay\".\"invocations\".\"max_planned_cost_micro_usd\" BETWEEN 1 AND 1000000 AND \"evaluation_replay\".\"invocations\".\"max_calls\"::bigint * (\"evaluation_replay\".\"invocations\".\"max_input_tokens_per_call\" + \"evaluation_replay\".\"invocations\".\"max_output_tokens_per_call\") <= \"evaluation_replay\".\"invocations\".\"max_total_tokens\" AND \"evaluation_replay\".\"invocations\".\"last_turn_number\" BETWEEN 0 AND least(\"evaluation_replay\".\"invocations\".\"max_calls\", 6)"
+        },
+        "replay_invocation_state": {
+          "name": "replay_invocation_state",
+          "value": "(\"evaluation_replay\".\"invocations\".\"status\" = 'admitted' AND \"evaluation_replay\".\"invocations\".\"started_at\" IS NULL AND \"evaluation_replay\".\"invocations\".\"closed_at\" IS NULL AND \"evaluation_replay\".\"invocations\".\"outcome\" IS NULL AND \"evaluation_replay\".\"invocations\".\"last_turn_number\" = 0) OR (\"evaluation_replay\".\"invocations\".\"status\" = 'running' AND \"evaluation_replay\".\"invocations\".\"started_at\" IS NOT NULL AND \"evaluation_replay\".\"invocations\".\"closed_at\" IS NULL AND \"evaluation_replay\".\"invocations\".\"outcome\" IS NULL) OR (\"evaluation_replay\".\"invocations\".\"status\" = 'closed' AND \"evaluation_replay\".\"invocations\".\"closed_at\" IS NOT NULL AND \"evaluation_replay\".\"invocations\".\"outcome\" IS NOT NULL AND \"evaluation_replay\".\"invocations\".\"outcome\" IN ('success','failure','unknown'))"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "evaluation_replay.turns": {
+      "name": "turns",
+      "schema": "evaluation_replay",
+      "columns": {
+        "invocation_id": {
+          "name": "invocation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "execution_id": {
+          "name": "execution_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "turn_number": {
+          "name": "turn_number",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "turn_id": {
+          "name": "turn_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "request_digest": {
+          "name": "request_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "transcript_digest": {
+          "name": "transcript_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tool_digest": {
+          "name": "tool_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "runner_body_digest": {
+          "name": "runner_body_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "digest_version": {
+          "name": "digest_version",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "stage": {
+          "name": "stage",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'issued'"
+        },
+        "issued_at": {
+          "name": "issued_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "clock_timestamp()"
+        },
+        "claimed_at": {
+          "name": "claimed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "prepared_at": {
+          "name": "prepared_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "consumed_at": {
+          "name": "consumed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "retired_at": {
+          "name": "retired_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "permit_id": {
+          "name": "permit_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "reservation_id": {
+          "name": "reservation_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "raw_body_digest": {
+          "name": "raw_body_digest",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "output_cap": {
+          "name": "output_cap",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "replay_turn_owner": {
+          "name": "replay_turn_owner",
+          "tableFrom": "turns",
+          "tableTo": "invocations",
+          "schemaTo": "evaluation_replay",
+          "columnsFrom": [
+            "invocation_id",
+            "execution_id"
+          ],
+          "columnsTo": [
+            "invocation_id",
+            "execution_id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "turns_invocation_id_turn_number_pk": {
+          "name": "turns_invocation_id_turn_number_pk",
+          "columns": [
+            "invocation_id",
+            "turn_number"
+          ]
+        }
+      },
+      "uniqueConstraints": {
+        "turns_turn_id_unique": {
+          "name": "turns_turn_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "turn_id"
+          ]
+        },
+        "turns_permit_id_unique": {
+          "name": "turns_permit_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "permit_id"
+          ]
+        },
+        "turns_reservation_id_unique": {
+          "name": "turns_reservation_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "reservation_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "replay_turn_number": {
+          "name": "replay_turn_number",
+          "value": "\"evaluation_replay\".\"turns\".\"turn_number\" BETWEEN 1 AND 6"
+        },
+        "replay_turn_digests": {
+          "name": "replay_turn_digests",
+          "value": "\"evaluation_replay\".\"turns\".\"request_digest\" ~ '^[a-f0-9]{64}$' AND \"evaluation_replay\".\"turns\".\"transcript_digest\" ~ '^[a-f0-9]{64}$' AND \"evaluation_replay\".\"turns\".\"tool_digest\" ~ '^[a-f0-9]{64}$' AND \"evaluation_replay\".\"turns\".\"runner_body_digest\" ~ '^[a-f0-9]{64}$' AND \"evaluation_replay\".\"turns\".\"digest_version\" = 'json-stringify-v1'"
+        },
+        "replay_turn_times": {
+          "name": "replay_turn_times",
+          "value": "(\"evaluation_replay\".\"turns\".\"claimed_at\" IS NULL OR \"evaluation_replay\".\"turns\".\"claimed_at\" >= \"evaluation_replay\".\"turns\".\"issued_at\") AND (\"evaluation_replay\".\"turns\".\"prepared_at\" IS NULL OR \"evaluation_replay\".\"turns\".\"prepared_at\" >= \"evaluation_replay\".\"turns\".\"claimed_at\") AND (\"evaluation_replay\".\"turns\".\"consumed_at\" IS NULL OR \"evaluation_replay\".\"turns\".\"consumed_at\" >= \"evaluation_replay\".\"turns\".\"prepared_at\") AND (\"evaluation_replay\".\"turns\".\"retired_at\" IS NULL OR \"evaluation_replay\".\"turns\".\"retired_at\" >= \"evaluation_replay\".\"turns\".\"issued_at\")"
+        },
+        "replay_turn_state": {
+          "name": "replay_turn_state",
+          "value": "(\"evaluation_replay\".\"turns\".\"stage\" = 'issued' AND \"evaluation_replay\".\"turns\".\"claimed_at\" IS NULL AND \"evaluation_replay\".\"turns\".\"prepared_at\" IS NULL AND \"evaluation_replay\".\"turns\".\"consumed_at\" IS NULL) OR (\"evaluation_replay\".\"turns\".\"stage\" = 'claimed' AND \"evaluation_replay\".\"turns\".\"claimed_at\" IS NOT NULL AND \"evaluation_replay\".\"turns\".\"prepared_at\" IS NULL AND \"evaluation_replay\".\"turns\".\"consumed_at\" IS NULL) OR (\"evaluation_replay\".\"turns\".\"stage\" = 'prepared' AND \"evaluation_replay\".\"turns\".\"claimed_at\" IS NOT NULL AND \"evaluation_replay\".\"turns\".\"prepared_at\" IS NOT NULL AND \"evaluation_replay\".\"turns\".\"consumed_at\" IS NULL) OR (\"evaluation_replay\".\"turns\".\"stage\" = 'consumed' AND \"evaluation_replay\".\"turns\".\"claimed_at\" IS NOT NULL AND \"evaluation_replay\".\"turns\".\"prepared_at\" IS NOT NULL AND \"evaluation_replay\".\"turns\".\"consumed_at\" IS NOT NULL)"
+        },
+        "replay_turn_permit": {
+          "name": "replay_turn_permit",
+          "value": "(\"evaluation_replay\".\"turns\".\"stage\" IN ('issued','claimed') AND \"evaluation_replay\".\"turns\".\"permit_id\" IS NULL AND \"evaluation_replay\".\"turns\".\"reservation_id\" IS NULL AND \"evaluation_replay\".\"turns\".\"raw_body_digest\" IS NULL AND \"evaluation_replay\".\"turns\".\"output_cap\" IS NULL) OR (\"evaluation_replay\".\"turns\".\"stage\" IN ('prepared','consumed') AND \"evaluation_replay\".\"turns\".\"permit_id\" IS NOT NULL AND \"evaluation_replay\".\"turns\".\"reservation_id\" IS NOT NULL AND \"evaluation_replay\".\"turns\".\"raw_body_digest\" IS NOT NULL AND \"evaluation_replay\".\"turns\".\"raw_body_digest\" ~ '^[a-f0-9]{64}$' AND \"evaluation_replay\".\"turns\".\"output_cap\" IS NOT NULL AND \"evaluation_replay\".\"turns\".\"output_cap\" BETWEEN 16 AND 512)"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": { "evaluation_replay": "evaluation_replay" },
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": { "evaluation_replay": "evaluation_replay" },
+    "tables": {}
+  }
+}

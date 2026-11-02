@@ -4,6 +4,18 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./evaluation-replay": {
+      "types": "./dist/evaluation-replay.d.ts",
+      "import": "./dist/evaluation-replay.js"
+    },
+    "./evaluation-replay-postgres": {
+      "types": "./dist/evaluation-replay-postgres.d.ts",
+      "import": "./dist/evaluation-replay-postgres.js"
+    },
+    "./evaluation-replay-migrate": {
+      "types": "./dist/evaluation-replay-migrate.d.ts",
+      "import": "./dist/evaluation-replay-migrate.js"
+    },
     "./recovery": {
       "types": "./dist/recovery.d.ts",
       "import": "./dist/recovery.js"

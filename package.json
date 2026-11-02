@@ -13,6 +13,9 @@
   },
   "packageManager": "npm@11.6.2",
   "scripts": {
+    "eval:replay:generate": "drizzle-kit generate --config=packages/database/evaluation-replay.drizzle.config.ts",
+    "eval:replay:check": "drizzle-kit check --config=packages/database/evaluation-replay.drizzle.config.ts",
+    "eval:replay:migrate": "npm run build && node --env-file=.env.evaluation-replay-admin scripts/migrate-evaluation-replay.ts",
     "eval:provider:test": "npm run build && vitest run --config vitest.provider-evaluation.config.ts",
     "eval:agent": "npm run build && node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run --config vitest.agent-evaluation.config.ts",
     "eval": "npm run build && node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run --config vitest.evaluation.config.ts",
